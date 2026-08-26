@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('http://localhost:3000'),
+  metadataBase: new URL('https://k-world.dkkof.chatgpt.site'),
   title: 'K World — Learn. Play. Explore.',
   description: 'A magical educational adventure where young explorers learn through stories, puzzles, and play.',
   openGraph: {
