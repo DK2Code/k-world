@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type AgeGroup = '5–7' | '8–10' | '11–13';
 type Subject = 'science' | 'math' | 'english';
@@ -33,10 +33,13 @@ type Profile = {
   progress: Record<Subject, { correct: number; attempts: number }>;
   sound: boolean;
   narration: boolean;
+  narrationAuto: boolean;
+  speechRate: number;
   reducedMotion: boolean;
   largeText: boolean;
   easyRead: boolean;
   playMinutes: number;
+  worldPosition: { x: number; y: number };
 };
 
 const STORE_KEY = 'kworld-adventure-v1';
@@ -47,11 +50,11 @@ const ageGroups: { range: AgeGroup; label: string; note: string; color: string }
 ];
 
 const regions = [
-  { id: 'science', name: 'Science Jungle', short: 'Science', icon: '✿', color: '#2ea875', subject: 'science' as Subject, level: 1, guide: 'Professor Pip', guideIcon: '●', description: 'A living laboratory where every leaf hides a discovery.' },
-  { id: 'math', name: 'Number Kingdom', short: 'Math', icon: '∑', color: '#f39a45', subject: 'math' as Subject, level: 1, guide: 'Sir Sum-a-Lot', guideIcon: '◆', description: 'Repair the royal starship with patterns and number power.' },
-  { id: 'english', name: 'Storybook Forest', short: 'English', icon: 'Aa', color: '#7457d9', subject: 'english' as Subject, level: 1, guide: 'Willa Wordwing', guideIcon: '✦', description: 'Words grow on trees and every path begins a new tale.' },
-  { id: 'puzzle', name: 'Puzzle Peaks', short: 'Mixed quest', icon: '◈', color: '#4b8fd6', subject: 'mixed' as const, level: 2, guide: 'Yeti Yara', guideIcon: '▲', description: 'A mountaintop trial that mixes every explorer skill.' },
-  { id: 'inventor', name: "Inventor's Island", short: 'STEM', icon: '⚙', color: '#dc6270', subject: 'mixed' as const, level: 3, guide: 'Tinker Tavi', guideIcon: '■', description: 'Build, test, improve—then make something brilliant.' },
+  { id: 'science', name: 'Science Jungle', short: 'Science', icon: '✿', color: '#2ea875', subject: 'science' as Subject, level: 1, guide: 'Professor Pip', guideIcon: '●', description: 'A living laboratory where every leaf hides a discovery.', position: { x: 17, y: 25 } },
+  { id: 'math', name: 'Number Kingdom', short: 'Math', icon: '∑', color: '#f39a45', subject: 'math' as Subject, level: 1, guide: 'Sir Sum-a-Lot', guideIcon: '◆', description: 'Repair the royal starship with patterns and number power.', position: { x: 48, y: 47 } },
+  { id: 'english', name: 'Storybook Forest', short: 'English', icon: 'Aa', color: '#7457d9', subject: 'english' as Subject, level: 1, guide: 'Willa Wordwing', guideIcon: '✦', description: 'Words grow on trees and every path begins a new tale.', position: { x: 80, y: 24 } },
+  { id: 'puzzle', name: 'Puzzle Peaks', short: 'Mixed quest', icon: '◈', color: '#4b8fd6', subject: 'mixed' as const, level: 2, guide: 'Yeti Yara', guideIcon: '▲', description: 'A mountaintop trial that mixes every explorer skill.', position: { x: 25, y: 76 } },
+  { id: 'inventor', name: "Inventor's Island", short: 'STEM', icon: '⚙', color: '#dc6270', subject: 'mixed' as const, level: 3, guide: 'Tinker Tavi', guideIcon: '■', description: 'Build, test, improve—then make something brilliant.', position: { x: 76, y: 76 } },
 ];
 
 const facts: Record<AgeGroup, Record<string, string>> = {
@@ -127,7 +130,8 @@ const defaultProfile: Profile = {
   age: null, nickname: 'Nova', skin: 1, hair: 0, outfit: 0, explorerClass: 'Scientist', companion: 'Fox',
   xp: 0, stars: 0, badges: [], facts: [], items: [], completed: [],
   progress: { science: { correct: 0, attempts: 0 }, math: { correct: 0, attempts: 0 }, english: { correct: 0, attempts: 0 } },
-  sound: true, narration: false, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
+  sound: true, narration: false, narrationAuto: false, speechRate: 0.9, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
+  worldPosition: { x: 48, y: 20 },
 };
 
 const nicknames = ['Nova', 'Sunny Star', 'Clever Fox', 'Mighty Maple'];
@@ -178,12 +182,20 @@ export default function Home() {
   const [nicknameError, setNicknameError] = useState('');
   const [parentAnswer, setParentAnswer] = useState('');
   const [parentUnlocked, setParentUnlocked] = useState(false);
+  const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
+  const [spokenText, setSpokenText] = useState('');
+  const [spokenWordIndex, setSpokenWordIndex] = useState(0);
+  const [heroFacing, setHeroFacing] = useState<'left' | 'right'>('right');
+  const [heroJumping, setHeroJumping] = useState(false);
+  const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as Profile;
+        // Restoring a local-only adventure is the intended one-time hydration step.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setProfile({ ...defaultProfile, ...parsed, progress: { ...defaultProfile.progress, ...parsed.progress } });
         setSelectedAge(parsed.age);
         if (parsed.age) setScreen('map');
@@ -204,9 +216,14 @@ export default function Home() {
     return [questions[age].science[0], questions[age].math[1], questions[age].english[2]];
   }, [activeRegion, profile.age]);
   const currentQuestion = currentQuestions[questionIndex];
+  const nearbyRegion = useMemo(() => regions.find((region) => {
+    const dx = region.position.x - profile.worldPosition.x;
+    const dy = region.position.y - profile.worldPosition.y;
+    return Math.sqrt(dx * dx + dy * dy) < 11;
+  }), [profile.worldPosition]);
 
-  const updateProfile = (patch: Partial<Profile>) => setProfile((current) => ({ ...current, ...patch }));
-  const playTone = (happy = true) => {
+  const updateProfile = useCallback((patch: Partial<Profile>) => setProfile((current) => ({ ...current, ...patch })), []);
+  const playTone = useCallback((happy = true) => {
     if (!profile.sound || typeof window === 'undefined') return;
     try {
       const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -214,15 +231,58 @@ export default function Home() {
       oscillator.frequency.value = happy ? 620 : 220; gain.gain.setValueAtTime(.05, context.currentTime); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .18);
       oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .18);
     } catch { /* Sound is optional. */ }
+  }, [profile.sound]);
+  const speak = useCallback((text: string, force = false) => {
+    if ((!profile.narration && !force) || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = profile.speechRate;
+    utterance.pitch = 1.08;
+    utterance.onstart = () => { setSpeechState('speaking'); setSpokenText(text); setSpokenWordIndex(0); };
+    utterance.onboundary = (event) => {
+      const before = text.slice(0, event.charIndex).trim();
+      setSpokenWordIndex(before ? before.split(/\s+/).length : 0);
+    };
+    utterance.onend = () => setSpeechState('idle');
+    utterance.onerror = () => setSpeechState('idle');
+    window.speechSynthesis.speak(utterance);
+  }, [profile.narration, profile.speechRate]);
+
+  const stopSpeech = useCallback(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    setSpeechState('idle');
+  }, []);
+
+  const toggleSpeech = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (speechState === 'speaking') { window.speechSynthesis.pause(); setSpeechState('paused'); }
+    else if (speechState === 'paused') { window.speechSynthesis.resume(); setSpeechState('speaking'); }
   };
-  const speak = (text: string) => {
-    if (!profile.narration || typeof speechSynthesis === 'undefined') return;
-    speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-  };
+
+  const screenNarration = useMemo(() => {
+    if (screen === 'welcome') return 'Welcome to K World! Choose your age group so every adventure is just right for you. Ages five to seven. Ages eight to ten. Or ages eleven to thirteen.';
+    if (screen === 'character') return 'Create your hero. Choose a skin tone, hair, outfit, explorer class, adventure nickname, and animal companion.';
+    if (screen === 'intro') return `Explorer ${profile.nickname}! The Compass of Curiosity is glowing. Five realms need your questions, ideas, and courage.`;
+    if (screen === 'map') return `World Explorer. Move ${profile.nickname} with the arrow keys, W A S D, or the big direction buttons. Walk close to a realm, then choose enter realm. ${regions.map((region) => `${region.name}, level ${region.level}.`).join(' ')}`;
+    if (screen === 'region') return `Welcome to ${activeRegion.name}. ${activeRegion.description} ${activeRegion.guide} has a quest made especially for you.`;
+    if (screen === 'game' && currentQuestion) return `${currentQuestion.prompt} Your choices are ${currentQuestion.choices.join(', ')}.`;
+    if (screen === 'rewards') return `Quest complete! Your curiosity lit the way. You earned ${reward.stars} stars and ${reward.xp} explorer points.`;
+    if (screen === 'backpack') return `Explorer backpack. You have ${profile.facts.length} wonder facts, ${profile.items.length} quest treasures, and ${profile.badges.length} badges.`;
+    if (screen === 'progress') return `${profile.nickname}'s progress. Level ${level}. ${profile.xp} explorer points and ${profile.stars} stars.`;
+    if (screen === 'settings') return 'Sound and accessibility settings. You can turn on read aloud, automatic narration, slower or faster speech, reduced motion, larger words, and easy-read type.';
+    return 'Grown-up corner. This private summary shows learning activity saved on this device.';
+  }, [activeRegion, currentQuestion, level, profile, reward, screen]);
+
+  useEffect(() => {
+    if (profile.narration && profile.narrationAuto) speak(screenNarration, true);
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    };
+  }, [profile.narration, profile.narrationAuto, questionIndex, screen, screenNarration, speak]);
 
   const beginAdventure = () => {
     if (!selectedAge) return;
-    updateProfile({ age: selectedAge });
+    updateProfile({ age: selectedAge, narration: selectedAge === '5–7', narrationAuto: selectedAge === '5–7' });
     setScreen('character');
   };
 
@@ -235,11 +295,56 @@ export default function Home() {
     updateProfile({ nickname: clean }); setCustomNickname(clean); setNicknameError('');
   };
 
-  const enterRegion = (id: string) => {
+  const enterRegion = useCallback((id: string) => {
     const region = regions.find((item) => item.id === id);
     if (!region || region.level > level) return;
+    stopSpeech();
     setActiveRegionId(id); setFactOpen(false); setScreen('region');
+  }, [level, stopSpeech]);
+
+  const moveHero = useCallback((dx: number, dy: number) => {
+    if (dx) setHeroFacing(dx < 0 ? 'left' : 'right');
+    setProfile((current) => ({
+      ...current,
+      worldPosition: {
+        x: Math.max(5, Math.min(94, current.worldPosition.x + dx)),
+        y: Math.max(8, Math.min(88, current.worldPosition.y + dy)),
+      },
+    }));
+  }, []);
+
+  const jumpHero = useCallback(() => {
+    setHeroJumping(true);
+    if (jumpTimer.current) clearTimeout(jumpTimer.current);
+    jumpTimer.current = setTimeout(() => setHeroJumping(false), profile.reducedMotion ? 80 : 520);
+    playTone();
+  }, [playTone, profile.reducedMotion]);
+
+  const travelToRegion = (id: string) => {
+    const destination = regions.find((region) => region.id === id);
+    if (!destination) return;
+    setProfile((current) => ({ ...current, worldPosition: { ...destination.position } }));
+    playTone();
   };
+
+  useEffect(() => {
+    if (screen !== 'map') return;
+    const step = profile.age === '5–7' ? 6 : 4;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input, select, textarea')) return;
+      const key = event.key.toLowerCase();
+      const moves: Record<string, [number, number]> = {
+        arrowleft: [-step, 0], a: [-step, 0], arrowright: [step, 0], d: [step, 0],
+        arrowup: [0, -step], w: [0, -step], arrowdown: [0, step], s: [0, step],
+      };
+      if (moves[key]) { event.preventDefault(); moveHero(...moves[key]); }
+      if (key === ' ') { event.preventDefault(); jumpHero(); }
+      if (key === 'enter' && nearbyRegion && level >= nearbyRegion.level) { event.preventDefault(); enterRegion(nearbyRegion.id); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [enterRegion, jumpHero, level, moveHero, nearbyRegion, profile.age, screen]);
 
   const discoverFact = () => {
     const fact = facts[profile.age ?? '8–10'][activeRegion.id];
@@ -304,6 +409,7 @@ export default function Home() {
               <div className="eyebrow"><span>✦</span> Your adventure starts here</div>
               <h1>How old is our<br /><em>new explorer?</em></h1>
               <p className="intro">We’ll shape every story, puzzle, and discovery to be just right for you.</p>
+              <ReadButton label="Read welcome aloud" onRead={() => speak(screenNarration, true)} />
               <div className="age-grid" role="radiogroup" aria-label="Choose your age range">
                 {ageGroups.map((group) => (
                   <button key={group.range} type="button" role="radio" aria-checked={selectedAge === group.range} className={`age-card ${group.color} ${selectedAge === group.range ? 'selected' : ''}`} onClick={() => setSelectedAge(group.range)}>
@@ -354,7 +460,7 @@ export default function Home() {
       {screen === 'intro' && (
         <section className="intro-screen">
           <div className="intro-stars" aria-hidden="true">✦ &nbsp; · &nbsp; ✦ &nbsp; · &nbsp; ✦</div>
-          <div className="intro-card"><div className="intro-avatar"><Avatar profile={profile} /><span className="companion-intro">{companions.find((item) => item.name === profile.companion)?.mark}</span></div><div className="intro-copy"><span className="eyebrow"><span>✦</span> A new legend arrives</span><h2>Explorer {profile.nickname}!</h2><p>The Compass of Curiosity is glowing. That only happens when a brave new thinker enters K World.</p><blockquote>“Five realms need your questions, your ideas, and your courage. Ready to discover what’s out there?”</blockquote><button className="primary-action" onClick={() => setScreen('map')}>Open the world map <span>→</span></button></div></div>
+          <div className="intro-card"><div className="intro-avatar"><Avatar profile={profile} /><span className="companion-intro">{companions.find((item) => item.name === profile.companion)?.mark}</span></div><div className="intro-copy"><span className="eyebrow"><span>✦</span> A new legend arrives</span><h2>Explorer {profile.nickname}!</h2><p>The Compass of Curiosity is glowing. That only happens when a brave new thinker enters K World.</p><blockquote>“Five realms need your questions, your ideas, and your courage. Ready to discover what’s out there?”</blockquote><ReadButton label="Read introduction aloud" onRead={() => speak(screenNarration, true)} /><button className="primary-action" onClick={() => setScreen('map')}>Open the world map <span>→</span></button></div></div>
         </section>
       )}
 
@@ -362,21 +468,27 @@ export default function Home() {
 
       {screen === 'map' && (
         <section className="map-screen">
-          <div className="map-heading"><div><span className="eyebrow"><span>✦</span> The world is waking up</span><h2>Where to next, {profile.nickname}?</h2><p>Choose a realm. Every quest teaches you something new.</p></div><div className="daily-card"><span>✦</span><div><small>Explorer streak</small><strong>{Math.max(1, new Set(profile.completed).size)} bright day{new Set(profile.completed).size === 1 ? '' : 's'}</strong></div></div></div>
-          <div className="world-map">
+          <div className="map-heading"><div><span className="eyebrow"><span>✦</span> Playable world explorer</span><h2>Adventure is this way, {profile.nickname}!</h2><p>Walk to a realm with arrow keys, W A S D, or the touch controls.</p></div><div className="daily-card"><span>✦</span><div><small>Explorer streak</small><strong>{Math.max(1, new Set(profile.completed).size)} bright day{new Set(profile.completed).size === 1 ? '' : 's'}</strong></div></div></div>
+          <div className="world-map" tabIndex={0} aria-label="Playable K World map. Move with arrow keys or W A S D.">
             <div className="map-water-lines" /><div className="map-cloud mc-one" /><div className="map-cloud mc-two" />
             <div className="trail trail-one" /><div className="trail trail-two" /><div className="trail trail-three" /><div className="trail trail-four" />
+            <span className="map-collectible collectible-one">✦</span><span className="map-collectible collectible-two">◆</span><span className="map-collectible collectible-three">★</span>
             {regions.map((region) => {
               const locked = level < region.level;
               const done = profile.completed.includes(region.id);
-              return <button key={region.id} className={`region-node region-${region.id} ${locked ? 'locked' : ''} ${done ? 'done' : ''}`} onClick={() => enterRegion(region.id)} aria-label={`${region.name}${locked ? `, unlocks at level ${region.level}` : ''}`}>
+              const isNear = nearbyRegion?.id === region.id;
+              return <button key={region.id} style={{ left: `${region.position.x}%`, top: `${region.position.y}%`, '--region': region.color } as React.CSSProperties} className={`region-node region-${region.id} ${locked ? 'locked' : ''} ${done ? 'done' : ''} ${isNear ? 'near' : ''}`} onClick={() => travelToRegion(region.id)} aria-label={`Travel to ${region.name}${locked ? `, unlocks at level ${region.level}` : ''}`}>
                 <span className="region-art"><i>{locked ? '•' : region.icon}</i><b /></span><span className="region-label"><small>{locked ? `Level ${region.level} needed` : done ? 'Quest replay' : region.short}</small><strong>{region.name}</strong></span>{done && <span className="done-star">★</span>}
               </button>;
             })}
-            <div className="map-avatar"><Avatar profile={profile} small /><span>You are here</span></div>
+            <div className={`map-avatar facing-${heroFacing} ${heroJumping ? 'jumping' : ''}`} style={{ left: `${profile.worldPosition.x}%`, top: `${profile.worldPosition.y}%` }}><Avatar profile={profile} small /><span>{heroJumping ? 'Boing!' : 'You are here'}</span></div>
+            {nearbyRegion && <div className={`realm-gate ${level < nearbyRegion.level ? 'gate-locked' : ''}`}>
+              <span>{level < nearbyRegion.level ? '◆' : '✦'}</span><div><small>{level < nearbyRegion.level ? 'Path locked' : 'You found a realm!'}</small><strong>{nearbyRegion.name}</strong></div>{level >= nearbyRegion.level ? <button onClick={() => enterRegion(nearbyRegion.id)}>Enter realm →</button> : <em>Reach level {nearbyRegion.level}</em>}
+            </div>}
             <div className="compass" aria-hidden="true"><b>N</b><i /></div>
           </div>
-          <p className="map-tip"><span>✦</span> Complete quests to level up and reveal hidden realms.</p>
+          <div className="map-controls" aria-label="World movement controls"><div className="control-help"><strong>Move your hero</strong><span>Arrow keys / W A S D · Space to jump · Enter a nearby realm</span></div><div className="d-pad"><button aria-label="Move up" onClick={() => moveHero(0, profile.age === '5–7' ? -6 : -4)}>▲</button><button aria-label="Move left" onClick={() => moveHero(profile.age === '5–7' ? -6 : -4, 0)}>◀</button><button className="jump-control" aria-label="Jump" onClick={jumpHero}>JUMP</button><button aria-label="Move right" onClick={() => moveHero(profile.age === '5–7' ? 6 : 4, 0)}>▶</button><button aria-label="Move down" onClick={() => moveHero(0, profile.age === '5–7' ? 6 : 4)}>▼</button></div></div>
+          <p className="map-tip"><span>✦</span> Walk near a realm to enter. Mistakes never cost lives or progress.</p>
         </section>
       )}
 
@@ -391,9 +503,9 @@ export default function Home() {
             <button className={`scene-hotspot secret-hotspot ${profile.items.includes(`${activeRegion.name} secret star`) ? 'found' : ''}`} onClick={collectSecret}><span>★</span><strong>Hidden star</strong><small>{profile.items.includes(`${activeRegion.name} secret star`) ? 'Found!' : 'Tap to collect'}</small></button>
             <div className="region-hero"><Avatar profile={profile} /><span className="hero-shadow" /></div>
             <div className="region-guide"><span>{activeRegion.guideIcon}</span></div>
-            <div className="dialogue-card"><div className="dialogue-name">{activeRegion.guide}</div><h2>Welcome to {activeRegion.name}!</h2><p>{activeRegion.description} I have a quest made especially for an explorer aged {profile.age}.</p><div className="dialogue-actions"><button className="secondary-action" onClick={discoverFact}>✦ Hear a fact</button><button className="primary-action" onClick={startGame}>Start the quest <span>→</span></button></div></div>
+            <div className="dialogue-card"><div className="dialogue-name">{activeRegion.guide}</div><h2>Welcome to {activeRegion.name}!</h2><p>{activeRegion.description} I have a quest made especially for an explorer aged {profile.age}.</p><ReadButton label="Read this message aloud" onRead={() => speak(screenNarration, true)} /><div className="dialogue-actions"><button className="secondary-action" onClick={discoverFact}>✦ Hear a fact</button><button className="primary-action" onClick={startGame}>Start the quest <span>→</span></button></div></div>
           </div>
-          {factOpen && <div className="fact-popover" role="dialog" aria-label="Discovered fact"><button onClick={() => setFactOpen(false)} aria-label="Close fact">×</button><span className="fact-icon">✦</span><small>New fact in your backpack</small><strong>{facts[profile.age ?? '8–10'][activeRegion.id]}</strong></div>}
+          {factOpen && <div className="fact-popover" role="dialog" aria-label="Discovered fact"><button onClick={() => setFactOpen(false)} aria-label="Close fact">×</button><span className="fact-icon">✦</span><small>New fact in your backpack</small><strong>{facts[profile.age ?? '8–10'][activeRegion.id]}</strong><ReadButton label="Read fact aloud" onRead={() => speak(facts[profile.age ?? '8–10'][activeRegion.id], true)} /></div>}
         </section>
       )}
 
@@ -408,10 +520,10 @@ export default function Home() {
               <div className="guide-mini"><span>{activeRegion.guideIcon}</span><p>{currentQuestion.subject === 'science' ? 'Observe closely!' : currentQuestion.subject === 'math' ? 'Power the next cell!' : 'Choose the strongest word!'}</p></div>
             </aside>
             <div className="question-card">
-              <span className="question-kicker">{activeRegion.name} · Challenge {questionIndex + 1}</span><h2>{currentQuestion.prompt}</h2>
+              <span className="question-kicker">{activeRegion.name} · Challenge {questionIndex + 1}</span><div className="question-with-audio"><h2>{currentQuestion.prompt}</h2><ReadButton label="Read question and answers aloud" onRead={() => speak(screenNarration, true)} /></div>
               <div className="answer-grid">{currentQuestion.choices.map((choice, index) => {
                 const isRight = correctAnswer && choice === currentQuestion.answer; const isWrong = selectedAnswer === choice && choice !== currentQuestion.answer;
-                return <button key={choice} className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correctAnswer || isWrong} onClick={() => answerQuestion(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button>;
+                return <div className="answer-row" key={choice}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correctAnswer || isWrong} onClick={() => answerQuestion(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read answer ${choice} aloud`} onRead={() => speak(choice, true)} /></div>;
               })}</div>
               {!correctAnswer && !selectedAnswer && <button className="hint-button" onClick={() => setShowHint(true)}>◇ Need a hint?</button>}
               {showHint && !correctAnswer && <div className="hint-panel"><strong>Try this:</strong> {currentQuestion.hint}</div>}
@@ -437,12 +549,13 @@ export default function Home() {
       )}
 
       {screen === 'settings' && (
-        <section className="content-screen settings-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Make K World yours</span><h2>Sound & accessibility</h2><p>Choose what makes exploring feel best.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div><div className="settings-grid"><SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" /><SettingToggle title="Read aloud" text="Hear quest questions and discoveries." enabled={profile.narration} onToggle={() => updateProfile({ narration: !profile.narration })} icon="▶" /><SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" /><SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" /><SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" /><article className="setting-card age-setting"><span>{profile.age || '—'}</span><div><h3>Adventure age</h3><p>Change the level of stories and challenges.</p><select value={profile.age ?? ''} onChange={(event) => { const age = event.target.value as AgeGroup; setSelectedAge(age); updateProfile({ age }); }}><option value="" disabled>Choose age</option>{ageGroups.map((group) => <option key={group.range}>{group.range}</option>)}</select></div></article></div></section>
+        <section className="content-screen settings-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Make K World yours</span><h2>Sound & accessibility</h2><p>Choose what makes exploring feel best.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div><div className="settings-grid"><SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" /><SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" /><SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" /><article className="setting-card speech-speed"><span>▶</span><div><h3>Narration speed</h3><p>{profile.speechRate < .85 ? 'Slow and steady' : profile.speechRate > 1.05 ? 'A little faster' : 'Comfortable pace'}</p><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /></div><strong>{profile.speechRate.toFixed(2)}×</strong></article><SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" /><SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" /><SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" /><article className="setting-card age-setting"><span>{profile.age || '—'}</span><div><h3>Adventure age</h3><p>Change the level of stories and challenges.</p><select value={profile.age ?? ''} onChange={(event) => { const age = event.target.value as AgeGroup; setSelectedAge(age); updateProfile({ age }); }}><option value="" disabled>Choose age</option>{ageGroups.map((group) => <option key={group.range}>{group.range}</option>)}</select></div></article></div></section>
       )}
 
       {screen === 'parent' && (
         <section className="content-screen parent-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Grown-up corner</span><h2>Learning overview</h2><p>A simple, private view of this explorer’s activity.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div>{!parentUnlocked ? <div className="parent-gate"><span className="gate-icon">7 + 5</span><h3>Quick grown-up check</h3><p>What is seven plus five?</p><div><input inputMode="numeric" value={parentAnswer} onChange={(event) => setParentAnswer(event.target.value)} aria-label="Answer to grown-up check" /><button className="primary-action" onClick={() => { if (parentAnswer.trim() === '12') setParentUnlocked(true); }}>Unlock</button></div><small>This keeps little explorers inside the game.</small></div> : <div className="parent-dashboard"><div className="parent-summary"><div><span>{profile.playMinutes}</span><small>Approx. play minutes</small></div><div><span>{profile.completed.length}</span><small>Quests played</small></div><div><span>{profile.facts.length}</span><small>Facts collected</small></div></div><article className="parent-report"><h3>Concepts practiced</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(profile.progress[subject].correct, profile.progress[subject].attempts)}</span><small>{profile.progress[subject].attempts} challenge attempts</small></div>)}</article><article className="next-adventure"><span>✦</span><div><h3>Suggested next adventure</h3><p>{profile.progress.science.attempts <= profile.progress.math.attempts ? 'Visit Science Jungle to practice observing habitats and living things.' : 'Return to Number Kingdom for a fresh pattern and problem-solving quest.'}</p></div></article><div className="parent-actions"><button className="secondary-action" onClick={() => setScreen('settings')}>Accessibility settings</button><button className="danger-link" onClick={resetAdventure}>Reset local adventure</button></div></div>}</section>
       )}
+      <ReadAloudDock text={screenNarration} spokenText={spokenText} spokenWordIndex={spokenWordIndex} state={speechState} enabled={profile.narration} onRead={() => speak(screenNarration, true)} onToggle={toggleSpeech} onStop={stopSpeech} />
     </main>
   );
 }
@@ -455,4 +568,17 @@ function EmptyCollection({ text }: { text: string }) { return <div className="em
 
 function SettingToggle({ title, text, enabled, onToggle, icon }: { title: string; text: string; enabled: boolean; onToggle: () => void; icon: string }) {
   return <article className="setting-card"><span>{icon}</span><div><h3>{title}</h3><p>{text}</p></div><button role="switch" aria-checked={enabled} className={`toggle ${enabled ? 'on' : ''}`} onClick={onToggle}><i /></button></article>;
+}
+
+function ReadButton({ label, onRead }: { label: string; onRead: () => void }) {
+  return <button className="read-button" type="button" onClick={onRead} aria-label={label}><span aria-hidden="true">🔊</span><span>Read to me</span></button>;
+}
+
+function ReadAloudDock({ text, spokenText, spokenWordIndex, state, enabled, onRead, onToggle, onStop }: { text: string; spokenText: string; spokenWordIndex: number; state: 'idle' | 'speaking' | 'paused'; enabled: boolean; onRead: () => void; onToggle: () => void; onStop: () => void }) {
+  const words = spokenText.split(/\s+/).filter(Boolean);
+  return <aside className={`read-aloud-dock ${state !== 'idle' ? 'is-reading' : ''}`} aria-label="Read aloud controls">
+    {state !== 'idle' && <div className="spoken-caption" aria-live="polite">{words.map((word, index) => <span className={index === spokenWordIndex ? 'spoken-now' : index < spokenWordIndex ? 'spoken-past' : ''} key={`${word}-${index}`}>{word} </span>)}</div>}
+    <div className="read-controls"><button className="dock-main" onClick={state === 'idle' ? onRead : onToggle}><span aria-hidden="true">{state === 'speaking' ? 'Ⅱ' : '🔊'}</span>{state === 'speaking' ? 'Pause' : state === 'paused' ? 'Continue' : 'Read this screen'}</button>{state !== 'idle' && <><button onClick={() => { onStop(); setTimeout(onRead, 30); }} aria-label="Replay narration">↻</button><button onClick={onStop} aria-label="Stop narration">■</button></>}<span className="narration-status">{enabled ? 'Read-aloud on' : 'Tap anytime to listen'}</span></div>
+    <span className="sr-only">Text ready to read: {text}</span>
+  </aside>;
 }
