@@ -14,7 +14,10 @@ type Question = {
   hint: string;
   explanation: string;
   token: string;
+  activity?: string;
 };
+
+type QuestVariant = { id: string; title: string; activity: string; intro: string };
 
 type Profile = {
   age: AgeGroup | null;
@@ -40,6 +43,8 @@ type Profile = {
   easyRead: boolean;
   playMinutes: number;
   worldPosition: { x: number; y: number };
+  questHistory: Record<string, string[]>;
+  questionHistory: Record<string, string[]>;
 };
 
 const STORE_KEY = 'kworld-adventure-v1';
@@ -126,12 +131,100 @@ const questions: Record<AgeGroup, Record<Subject, Question[]>> = {
   },
 };
 
+const extraQuestions: Record<AgeGroup, Record<Subject, Question[]>> = {
+  '5–7': {
+    science: [
+      { subject: 'science', activity: 'Weather Watch', token: '☀', prompt: 'Which object gives Earth light during the day?', choices: ['The Sun', 'The Moon', 'A cloud'], answer: 'The Sun', hint: 'It looks bright in the daytime sky.', explanation: 'The Sun is a star that gives Earth light and warmth.' },
+      { subject: 'science', activity: 'Animal Detective', token: '羽', prompt: 'Which covering helps a bird fly and stay warm?', choices: ['Feathers', 'Scales', 'Shells'], answer: 'Feathers', hint: 'Birds have many light, soft ones.', explanation: 'Feathers help birds fly, stay warm, and keep dry.' },
+      { subject: 'science', activity: 'Water Lab', token: '❄', prompt: 'What happens to water when it gets very cold?', choices: ['It freezes', 'It grows', 'It glows'], answer: 'It freezes', hint: 'Think about an ice cube.', explanation: 'Water freezes and becomes solid ice when it gets cold enough.' },
+    ],
+    math: [
+      { subject: 'math', activity: 'Shape Builder', token: '□', prompt: 'Which shape has four equal sides?', choices: ['Square', 'Triangle', 'Circle'], answer: 'Square', hint: 'It looks like a box face.', explanation: 'A square has four straight sides that are all the same length.' },
+      { subject: 'math', activity: 'Berry Counter', token: '5+5', prompt: 'Five red berries and five blue berries fill a basket. How many berries are there?', choices: ['8', '10', '12'], answer: '10', hint: 'Count on five more from 5.', explanation: '5 + 5 = 10 berries.' },
+      { subject: 'math', activity: 'Number Gate', token: '9>6', prompt: 'Which number is greater?', choices: ['9', '6', 'They match'], answer: '9', hint: 'The greater number is farther along when you count.', explanation: 'Nine is greater than six.' },
+    ],
+    english: [
+      { subject: 'english', activity: 'Rhyme Catch', token: '♫', prompt: 'Which word rhymes with cat?', choices: ['Hat', 'Cup', 'Dog'], answer: 'Hat', hint: 'Rhyming words have the same ending sound.', explanation: 'Cat and hat both end with the “at” sound.' },
+      { subject: 'english', activity: 'Sound Search', token: 'B', prompt: 'Which word begins with the same sound as ball?', choices: ['Boat', 'Moon', 'Sun'], answer: 'Boat', hint: 'Listen for the “b” sound.', explanation: 'Ball and boat both begin with the letter B sound.' },
+      { subject: 'english', activity: 'Word Garden', token: '+s', prompt: 'There is one star. Now there are two ___.', choices: ['stars', 'star', 'starred'], answer: 'stars', hint: 'We often add S when there is more than one.', explanation: 'Stars is the plural word for more than one star.' },
+    ],
+  },
+  '8–10': {
+    science: [
+      { subject: 'science', activity: 'Matter Mixer', token: 'H₂O', prompt: 'Ice melts into liquid water. What caused this change?', choices: ['Heat energy', 'Gravity alone', 'A shadow'], answer: 'Heat energy', hint: 'Melting happens when a solid gets warmer.', explanation: 'Ice absorbs heat energy and changes from a solid into a liquid.' },
+      { subject: 'science', activity: 'Food-Chain Rescue', token: '→', prompt: 'In grass → rabbit → fox, which organism is the producer?', choices: ['Grass', 'Rabbit', 'Fox'], answer: 'Grass', hint: 'A producer makes its own food using sunlight.', explanation: 'Grass is a plant, so it makes food through photosynthesis.' },
+      { subject: 'science', activity: 'Space Signal', token: '♁', prompt: 'Which planet is known for its large rings?', choices: ['Saturn', 'Mercury', 'Mars'], answer: 'Saturn', hint: 'Its rings are made mostly of ice and rock.', explanation: 'Saturn has the most visible ring system in our solar system.' },
+    ],
+    math: [
+      { subject: 'math', activity: 'Castle Perimeter', token: 'P', prompt: 'A square garden has sides of 7 metres. What is its perimeter?', choices: ['14 m', '28 m', '49 m'], answer: '28 m', hint: 'Add all four equal sides.', explanation: '7 + 7 + 7 + 7 = 28 metres.' },
+      { subject: 'math', activity: 'Fair Share', token: '24÷6', prompt: 'Twenty-four moon cakes are shared equally among six crews. How many does each crew get?', choices: ['4', '6', '18'], answer: '4', hint: 'Find the number that makes 6 × something equal 24.', explanation: '24 ÷ 6 = 4 moon cakes per crew.' },
+      { subject: 'math', activity: 'Fraction Forge', token: '½', prompt: 'Which fraction is equal to one half?', choices: ['2/4', '1/3', '3/4'], answer: '2/4', hint: 'Two of four equal parts is half of all four.', explanation: 'Dividing the top and bottom of 2/4 by 2 gives 1/2.' },
+    ],
+    english: [
+      { subject: 'english', activity: 'Verb Vine', token: 'RUN', prompt: 'Which word is the verb in “The silver bird sings softly”?', choices: ['sings', 'silver', 'softly'], answer: 'sings', hint: 'A verb shows an action or state.', explanation: 'Sings tells what the bird is doing.' },
+      { subject: 'english', activity: 'Prefix Portal', token: 're-', prompt: 'What does the prefix re- mean in rebuild?', choices: ['Again', 'Before', 'Not'], answer: 'Again', hint: 'To replay is to play one more time.', explanation: 'The prefix re- often means again, so rebuild means build again.' },
+      { subject: 'english', activity: 'Clue Finder', token: '⌕', prompt: '“Lena packed boots and a raincoat. Dark clouds filled the sky.” What will probably happen?', choices: ['It will rain', 'It will snow indoors', 'The sun will disappear forever'], answer: 'It will rain', hint: 'Use the clothing and clouds as clues.', explanation: 'The raincoat and dark clouds support the inference that rain is coming.' },
+    ],
+  },
+  '11–13': {
+    science: [
+      { subject: 'science', activity: 'Cell Scanner', token: 'DNA', prompt: 'Which cell structure contains most of a eukaryotic cell’s DNA?', choices: ['Nucleus', 'Cell membrane', 'Cytoplasm'], answer: 'Nucleus', hint: 'It acts like the cell’s information centre.', explanation: 'In eukaryotic cells, most genetic material is stored in the nucleus.' },
+      { subject: 'science', activity: 'Energy Lab', token: '→', prompt: 'A solar panel changes light energy mainly into which form?', choices: ['Electrical energy', 'Sound energy', 'Nuclear energy'], answer: 'Electrical energy', hint: 'It can power lights and devices.', explanation: 'Photovoltaic cells convert light energy into electrical energy.' },
+      { subject: 'science', activity: 'Atom Forge', token: 'p⁺', prompt: 'Which particle has a positive electric charge?', choices: ['Proton', 'Electron', 'Neutron'], answer: 'Proton', hint: 'Electrons are negative and neutrons are neutral.', explanation: 'Protons have positive charge, electrons negative charge, and neutrons no charge.' },
+    ],
+    math: [
+      { subject: 'math', activity: 'Equation Gate', token: '3x=21', prompt: 'Solve 3x = 21. What is x?', choices: ['7', '18', '63'], answer: '7', hint: 'Divide both sides by 3.', explanation: '21 ÷ 3 = 7, so x = 7.' },
+      { subject: 'math', activity: 'Ratio Reactor', token: '2:5', prompt: 'Blue and gold crystals are in a 2:5 ratio. If there are 10 blue crystals, how many are gold?', choices: ['20', '25', '50'], answer: '25', hint: 'The blue amount was multiplied by 5.', explanation: 'Multiplying both parts of 2:5 by 5 gives 10:25.' },
+      { subject: 'math', activity: 'Chance Chamber', token: 'P', prompt: 'A bag has 3 red and 7 blue gems. What is the probability of choosing a red gem?', choices: ['3/10', '7/10', '1/3'], answer: '3/10', hint: 'There are 10 gems altogether and 3 favourable outcomes.', explanation: 'Probability is favourable outcomes over total outcomes, so it is 3/10.' },
+    ],
+    english: [
+      { subject: 'english', activity: 'Inference Trail', token: '⌕', prompt: '“Kai checked the clock twice and drummed his fingers.” What can you reasonably infer?', choices: ['Kai is impatient', 'Kai is asleep', 'Kai cannot see the clock'], answer: 'Kai is impatient', hint: 'Look at the repeated checking and restless movement.', explanation: 'Those details suggest Kai is waiting and becoming impatient.' },
+      { subject: 'english', activity: 'Figurative Forge', token: '☁', prompt: 'Which sentence uses personification?', choices: ['The wind whispered through the pines.', 'The wind was cold.', 'The wind moved at 20 km/h.'], answer: 'The wind whispered through the pines.', hint: 'Personification gives a nonhuman thing a human action.', explanation: 'Whispering is a human action given to the wind.' },
+      { subject: 'english', activity: 'Clause Builder', token: '+', prompt: 'Which group of words is an independent clause?', choices: ['The explorers reached camp.', 'Because the storm ended', 'While crossing the bridge'], answer: 'The explorers reached camp.', hint: 'It must express a complete thought on its own.', explanation: '“The explorers reached camp” has a subject, verb, and complete meaning.' },
+    ],
+  },
+};
+
+const questVariants: Record<string, QuestVariant[]> = {
+  science: [
+    { id: 'habitat-rescue', title: 'Habitat Rescue', activity: 'Animal sorting expedition', intro: 'A windstorm mixed up the jungle trail signs. Use science clues to guide every creature home.' },
+    { id: 'plant-power', title: 'Plant Power Lab', activity: 'Living-world investigation', intro: 'The glow-vines are fading. Observe plants, energy, and ecosystems to help them shine again.' },
+    { id: 'body-detective', title: 'Body Detective', activity: 'Life-science mystery', intro: 'Professor Pip found a book of missing body clues. Solve the mystery one discovery at a time.' },
+    { id: 'space-signal', title: 'Signal from the Stars', activity: 'Space and physics mission', intro: 'A friendly satellite is sending scrambled science signals. Decode them before it passes overhead.' },
+  ],
+  math: [
+    { id: 'pattern-bridge', title: 'The Pattern Bridge', activity: 'Number-pattern crossing', intro: 'The royal bridge changes with every step. Continue its patterns to make a safe path.' },
+    { id: 'dragon-delivery', title: 'Dragon Berry Delivery', activity: 'Story problem adventure', intro: 'Hungry hatchlings are waiting. Count and calculate the perfect number of glow-berries.' },
+    { id: 'shape-castle', title: 'Castle of Shapes', activity: 'Geometry building challenge', intro: 'The castle towers lost their blueprints. Use shape and measurement clues to rebuild them.' },
+    { id: 'skyship-repair', title: 'Royal Skyship Repair', activity: 'Arithmetic repair mission', intro: 'The royal skyship needs number power. Solve each problem to charge another engine cell.' },
+  ],
+  english: [
+    { id: 'spelling-sprint', title: 'The Spelling Sprint', activity: 'Word-catching quest', intro: 'Runaway letters are hiding among the trees. Catch the right words and return them to the library.' },
+    { id: 'sentence-repair', title: 'Sentence Repair Shop', activity: 'Grammar fixing mission', intro: 'A word storm jumbled the forest signs. Repair each sentence so travellers can find their way.' },
+    { id: 'story-clues', title: 'The Story Clue Trail', activity: 'Reading mystery', intro: 'Willa left clues inside tiny tales. Read closely and uncover the path to the secret ending.' },
+    { id: 'vocabulary-garden', title: 'Vocabulary Garden', activity: 'Meaning and word-choice quest', intro: 'The word-flowers bloom when the strongest word is chosen. Help the whole garden grow.' },
+  ],
+  puzzle: [
+    { id: 'yeti-logic', title: 'Yeti Yara’s Logic Trail', activity: 'Mixed-subject logic quest', intro: 'Yara marked a safe trail with science, number, and word clues. Follow them to the summit.' },
+    { id: 'crystal-sequence', title: 'Crystal Sequence', activity: 'Pattern and clue hunt', intro: 'Mountain crystals are flashing in a secret order. Combine every explorer skill to decode them.' },
+    { id: 'mystery-doors', title: 'The Three Mystery Doors', activity: 'Choice and deduction challenge', intro: 'Each door asks a different kind of question. Solve all three to open the peak observatory.' },
+    { id: 'summit-mix', title: 'Summit Skill Mix', activity: 'Mixed-subject boss challenge', intro: 'A playful snowstorm mixed every lesson together. Sort out the clues and calm the mountain.' },
+  ],
+  inventor: [
+    { id: 'blueprint-builder', title: 'Blueprint Builder', activity: 'Creative STEM planning', intro: 'Tinker Tavi has an idea but the blueprint is incomplete. Add the right science, number, and word clues.' },
+    { id: 'prototype-test', title: 'Prototype Test Run', activity: 'Test-and-improve mission', intro: 'A new island machine almost works. Investigate each problem and improve the design.' },
+    { id: 'energy-machine', title: 'The Clean Energy Machine', activity: 'Energy and calculation quest', intro: 'Power the workshop with a smart new machine by solving its mixed STEM controls.' },
+    { id: 'invention-fair', title: 'Island Invention Fair', activity: 'Mixed-subject showcase', intro: 'The invention fair opens soon. Complete every challenge to prepare Tavi’s surprising creation.' },
+  ],
+};
+
 const defaultProfile: Profile = {
   age: null, nickname: 'Nova', skin: 1, hair: 0, outfit: 0, explorerClass: 'Scientist', companion: 'Fox',
   xp: 0, stars: 0, badges: [], facts: [], items: [], completed: [],
   progress: { science: { correct: 0, attempts: 0 }, math: { correct: 0, attempts: 0 }, english: { correct: 0, attempts: 0 } },
   sound: true, narration: false, narrationAuto: false, speechRate: 0.9, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
   worldPosition: { x: 48, y: 20 },
+  questHistory: {}, questionHistory: {},
 };
 
 const nicknames = ['Nova', 'Sunny Star', 'Clever Fox', 'Mighty Maple'];
@@ -150,6 +243,23 @@ function mastery(correct: number, attempts: number) {
   if (correct >= 6 && ratio >= .8) return 'Quest Master';
   if (correct >= 3 && ratio >= .6) return 'Confident';
   return 'Growing';
+}
+
+function shuffled<T>(items: T[]) {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapWith = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapWith]] = [copy[swapWith], copy[index]];
+  }
+  return copy;
+}
+
+function questionKey(question: Question) { return `${question.subject}:${question.prompt}`; }
+
+function poolForRegion(age: AgeGroup, regionId: string) {
+  const subject = regions.find((region) => region.id === regionId)?.subject;
+  if (subject && subject !== 'mixed') return [...questions[age][subject], ...extraQuestions[age][subject]];
+  return (['science', 'math', 'english'] as Subject[]).flatMap((item) => [...questions[age][item], ...extraQuestions[age][item]]);
 }
 
 function Avatar({ profile, small = false }: { profile: Profile; small?: boolean }) {
@@ -171,6 +281,8 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [selectedAge, setSelectedAge] = useState<AgeGroup | null>(null);
   const [activeRegionId, setActiveRegionId] = useState('science');
+  const [activeQuest, setActiveQuest] = useState<QuestVariant>(questVariants.science[0]);
+  const [questQuestions, setQuestQuestions] = useState<Question[]>([]);
   const [factOpen, setFactOpen] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
@@ -210,11 +322,7 @@ export default function Home() {
 
   const level = levelFromXp(profile.xp);
   const activeRegion = regions.find((region) => region.id === activeRegionId) ?? regions[0];
-  const currentQuestions = useMemo(() => {
-    const age = profile.age ?? '8–10';
-    if (activeRegion.subject !== 'mixed') return questions[age][activeRegion.subject];
-    return [questions[age].science[0], questions[age].math[1], questions[age].english[2]];
-  }, [activeRegion, profile.age]);
+  const currentQuestions = questQuestions.length ? questQuestions : poolForRegion(profile.age ?? '8–10', activeRegionId).slice(0, 3);
   const currentQuestion = currentQuestions[questionIndex];
   const nearbyRegion = useMemo(() => regions.find((region) => {
     const dx = region.position.x - profile.worldPosition.x;
@@ -264,14 +372,14 @@ export default function Home() {
     if (screen === 'character') return 'Create your hero. Choose a skin tone, hair, outfit, explorer class, adventure nickname, and animal companion.';
     if (screen === 'intro') return `Explorer ${profile.nickname}! The Compass of Curiosity is glowing. Five realms need your questions, ideas, and courage.`;
     if (screen === 'map') return `World Explorer. Move ${profile.nickname} with the arrow keys, W A S D, or the big direction buttons. Walk close to a realm, then choose enter realm. ${regions.map((region) => `${region.name}, level ${region.level}.`).join(' ')}`;
-    if (screen === 'region') return `Welcome to ${activeRegion.name}. ${activeRegion.description} ${activeRegion.guide} has a quest made especially for you.`;
+    if (screen === 'region') return `Welcome to ${activeRegion.name}. Your new quest is ${activeQuest.title}. ${activeQuest.intro}`;
     if (screen === 'game' && currentQuestion) return `${currentQuestion.prompt} Your choices are ${currentQuestion.choices.join(', ')}.`;
     if (screen === 'rewards') return `Quest complete! Your curiosity lit the way. You earned ${reward.stars} stars and ${reward.xp} explorer points.`;
     if (screen === 'backpack') return `Explorer backpack. You have ${profile.facts.length} wonder facts, ${profile.items.length} quest treasures, and ${profile.badges.length} badges.`;
     if (screen === 'progress') return `${profile.nickname}'s progress. Level ${level}. ${profile.xp} explorer points and ${profile.stars} stars.`;
     if (screen === 'settings') return 'Sound and accessibility settings. You can turn on read aloud, automatic narration, slower or faster speech, reduced motion, larger words, and easy-read type.';
     return 'Grown-up corner. This private summary shows learning activity saved on this device.';
-  }, [activeRegion, currentQuestion, level, profile, reward, screen]);
+  }, [activeQuest, activeRegion, currentQuestion, level, profile, reward, screen]);
 
   useEffect(() => {
     if (profile.narration && profile.narrationAuto) speak(screenNarration, true);
@@ -295,12 +403,50 @@ export default function Home() {
     updateProfile({ nickname: clean }); setCustomNickname(clean); setNicknameError('');
   };
 
+  const prepareQuest = useCallback((id: string) => {
+    const age = profile.age ?? '8–10';
+    const variants = questVariants[id] ?? questVariants.science;
+    const usedQuestIds = profile.questHistory[id] ?? [];
+    let availableVariants = variants.filter((variant) => !usedQuestIds.includes(variant.id));
+    const questCycleComplete = availableVariants.length === 0;
+    if (questCycleComplete) {
+      const lastQuestId = usedQuestIds.at(-1);
+      availableVariants = variants.filter((variant) => variant.id !== lastQuestId);
+    }
+    const nextQuest = shuffled(availableVariants)[0] ?? variants[0];
+
+    const fullPool = poolForRegion(age, id);
+    const usedQuestionIds = profile.questionHistory[id] ?? [];
+    const previousQuestionIds = usedQuestionIds.slice(-3);
+    const unusedQuestions = fullPool.filter((question) => !usedQuestionIds.includes(questionKey(question)));
+    const questionCycleComplete = unusedQuestions.length < 3;
+    const eligibleQuestions = questionCycleComplete
+      ? fullPool.filter((question) => !previousQuestionIds.includes(questionKey(question)))
+      : unusedQuestions;
+    const region = regions.find((item) => item.id === id);
+    const nextQuestions = region?.subject === 'mixed'
+      ? (['science', 'math', 'english'] as Subject[]).map((subject) => shuffled(eligibleQuestions.filter((question) => question.subject === subject))[0]).filter((question): question is Question => Boolean(question))
+      : shuffled(eligibleQuestions).slice(0, 3);
+    const finalQuestions = nextQuestions.length === 3 ? shuffled(nextQuestions) : shuffled(fullPool).slice(0, 3);
+    const selectedQuestionIds = finalQuestions.map(questionKey);
+
+    setActiveQuest(nextQuest);
+    setQuestQuestions(finalQuestions);
+    setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0);
+    setProfile((current) => ({
+      ...current,
+      questHistory: { ...current.questHistory, [id]: questCycleComplete ? [nextQuest.id] : [...usedQuestIds, nextQuest.id] },
+      questionHistory: { ...current.questionHistory, [id]: questionCycleComplete ? selectedQuestionIds : [...usedQuestionIds, ...selectedQuestionIds] },
+    }));
+  }, [profile.age, profile.questionHistory, profile.questHistory]);
+
   const enterRegion = useCallback((id: string) => {
     const region = regions.find((item) => item.id === id);
     if (!region || region.level > level) return;
     stopSpeech();
+    prepareQuest(id);
     setActiveRegionId(id); setFactOpen(false); setScreen('region');
-  }, [level, stopSpeech]);
+  }, [level, prepareQuest, stopSpeech]);
 
   const moveHero = useCallback((dx: number, dy: number) => {
     if (dx) setHeroFacing(dx < 0 ? 'left' : 'right');
@@ -361,6 +507,19 @@ export default function Home() {
   const startGame = () => {
     setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0); setScreen('game');
     speak(currentQuestions[0].prompt);
+  };
+
+  const restartQuest = () => {
+    stopSpeech();
+    setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0);
+    speak(`Restarting ${activeQuest.title}. ${currentQuestions[0].prompt}`);
+  };
+
+  const chooseNewQuest = () => {
+    stopSpeech();
+    prepareQuest(activeRegion.id);
+    setFactOpen(false);
+    setScreen('region');
   };
 
   const answerQuestion = (choice: string) => {
@@ -451,7 +610,7 @@ export default function Home() {
                 <div className="control-group"><h3>Adventure nickname</h3><div className="nickname-row">{nicknames.map((name) => <button key={name} className={profile.nickname === name ? 'active' : ''} onClick={() => updateProfile({ nickname: name })}>{name}</button>)}</div><div className="custom-name"><input value={customNickname} maxLength={16} placeholder="Or make a friendly nickname" aria-label="Custom adventure nickname" onChange={(event) => setCustomNickname(event.target.value)} /><button onClick={useCustomNickname}>Use</button></div>{nicknameError && <small className="field-error">{nicknameError}</small>}</div>
                 <div className="control-group"><h3>Animal companion</h3><div className="companion-row">{companions.map((item) => <button key={item.name} className={profile.companion === item.name ? 'active' : ''} onClick={() => updateProfile({ companion: item.name })}><span>{item.mark}</span>{item.name}</button>)}</div></div>
               </div>
-              <button className="primary-action" onClick={() => setScreen('intro')}>Meet my hero <span>→</span></button>
+              <button className="primary-action" onClick={() => setScreen(profile.completed.length ? 'map' : 'intro')}>{profile.completed.length ? 'Save hero & return' : 'Meet my hero'} <span>→</span></button>
             </div>
           </div>
         </section>
@@ -503,7 +662,7 @@ export default function Home() {
             <button className={`scene-hotspot secret-hotspot ${profile.items.includes(`${activeRegion.name} secret star`) ? 'found' : ''}`} onClick={collectSecret}><span>★</span><strong>Hidden star</strong><small>{profile.items.includes(`${activeRegion.name} secret star`) ? 'Found!' : 'Tap to collect'}</small></button>
             <div className="region-hero"><Avatar profile={profile} /><span className="hero-shadow" /></div>
             <div className="region-guide"><span>{activeRegion.guideIcon}</span></div>
-            <div className="dialogue-card"><div className="dialogue-name">{activeRegion.guide}</div><h2>Welcome to {activeRegion.name}!</h2><p>{activeRegion.description} I have a quest made especially for an explorer aged {profile.age}.</p><ReadButton label="Read this message aloud" onRead={() => speak(screenNarration, true)} /><div className="dialogue-actions"><button className="secondary-action" onClick={discoverFact}>✦ Hear a fact</button><button className="primary-action" onClick={startGame}>Start the quest <span>→</span></button></div></div>
+            <div className="dialogue-card"><div className="dialogue-name">{activeRegion.guide}</div><span className="quest-type">{activeQuest.activity}</span><h2>{activeQuest.title}</h2><p>{activeQuest.intro}</p><small className="fresh-quest-note">✦ Fresh activities chosen for this visit</small><ReadButton label="Read this quest aloud" onRead={() => speak(screenNarration, true)} /><div className="dialogue-actions"><button className="secondary-action" onClick={discoverFact}>✦ Hear a fact</button><button className="primary-action" onClick={startGame}>Start the quest <span>→</span></button></div></div>
           </div>
           {factOpen && <div className="fact-popover" role="dialog" aria-label="Discovered fact"><button onClick={() => setFactOpen(false)} aria-label="Close fact">×</button><span className="fact-icon">✦</span><small>New fact in your backpack</small><strong>{facts[profile.age ?? '8–10'][activeRegion.id]}</strong><ReadButton label="Read fact aloud" onRead={() => speak(facts[profile.age ?? '8–10'][activeRegion.id], true)} /></div>}
         </section>
@@ -511,16 +670,16 @@ export default function Home() {
 
       {screen === 'game' && currentQuestion && (
         <section className={`game-screen game-${currentQuestion.subject}`}>
-          <header className="game-topbar"><button onClick={() => setScreen('region')} aria-label="Leave quest">×</button><div><span>Quest {questionIndex + 1} of {currentQuestions.length}</span><div className="quest-progress"><i style={{ width: `${((questionIndex + (correctAnswer ? 1 : 0)) / currentQuestions.length) * 100}%` }} /></div></div><span className="game-score">★ {score}</span></header>
+          <header className="game-topbar"><button onClick={() => setScreen('region')} aria-label="Leave quest">×</button><button className="restart-game" onClick={restartQuest} aria-label="Restart this quest from the beginning">↻ <span>Restart</span></button><div><span>{activeQuest.title} · {questionIndex + 1} of {currentQuestions.length}</span><div className="quest-progress"><i style={{ width: `${((questionIndex + (correctAnswer ? 1 : 0)) / currentQuestions.length) * 100}%` }} /></div></div><span className="game-score">★ {score}</span></header>
           <div className="mini-game-layout">
             <aside className="game-visual">
-              <div className="visual-label">{currentQuestion.subject === 'science' ? 'Habitat lab' : currentQuestion.subject === 'math' ? 'Starship repair' : 'Story spell'}</div>
+              <div className="visual-label">{currentQuestion.activity ?? activeQuest.activity}</div>
               <div className="challenge-token">{currentQuestion.token}</div>
               <div className="visual-machine"><i /><i /><i /></div>
               <div className="guide-mini"><span>{activeRegion.guideIcon}</span><p>{currentQuestion.subject === 'science' ? 'Observe closely!' : currentQuestion.subject === 'math' ? 'Power the next cell!' : 'Choose the strongest word!'}</p></div>
             </aside>
             <div className="question-card">
-              <span className="question-kicker">{activeRegion.name} · Challenge {questionIndex + 1}</span><div className="question-with-audio"><h2>{currentQuestion.prompt}</h2><ReadButton label="Read question and answers aloud" onRead={() => speak(screenNarration, true)} /></div>
+              <span className="question-kicker">{activeRegion.name} · {activeQuest.title} · Challenge {questionIndex + 1}</span><div className="question-with-audio"><h2>{currentQuestion.prompt}</h2><ReadButton label="Read question and answers aloud" onRead={() => speak(screenNarration, true)} /></div>
               <div className="answer-grid">{currentQuestion.choices.map((choice, index) => {
                 const isRight = correctAnswer && choice === currentQuestion.answer; const isWrong = selectedAnswer === choice && choice !== currentQuestion.answer;
                 return <div className="answer-row" key={choice}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correctAnswer || isWrong} onClick={() => answerQuestion(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read answer ${choice} aloud`} onRead={() => speak(choice, true)} /></div>;
@@ -536,7 +695,7 @@ export default function Home() {
 
       {screen === 'rewards' && (
         <section className="reward-screen">
-          <div className="reward-rays" aria-hidden="true" /><div className="reward-card"><span className="reward-kicker">Quest complete!</span><div className="reward-emblem">★<span>✦</span></div><h2>Your curiosity lit the way!</h2><p>{activeRegion.guide} is impressed, {profile.nickname}. You kept thinking, used your hints, and made the realm brighter.</p><div className="reward-grid"><div><span>+{reward.stars}</span><small>Stars</small></div><div><span>+{reward.xp}</span><small>Explorer XP</small></div><div><span>{reward.badge ? '✓' : '✦'}</span><small>{reward.badge || 'Quest token'}</small></div></div><div className="level-progress"><span>Level {level}</span><div><i style={{ width: `${profile.xp % 80 / 80 * 100}%` }} /></div><span>{80 - profile.xp % 80} XP to next</span></div><div className="reward-actions"><button className="secondary-action" onClick={() => setScreen('backpack')}>See backpack</button><button className="primary-action" onClick={() => setScreen('map')}>Keep exploring <span>→</span></button></div></div>
+          <div className="reward-rays" aria-hidden="true" /><div className="reward-card"><span className="reward-kicker">{activeQuest.title} complete!</span><div className="reward-emblem">★<span>✦</span></div><h2>Your curiosity lit the way!</h2><p>{activeRegion.guide} is impressed, {profile.nickname}. A different quest and fresh activities are ready whenever you return.</p><div className="reward-grid"><div><span>+{reward.stars}</span><small>Stars</small></div><div><span>+{reward.xp}</span><small>Explorer XP</small></div><div><span>{reward.badge ? '✓' : '✦'}</span><small>{reward.badge || 'Quest token'}</small></div></div><div className="level-progress"><span>Level {level}</span><div><i style={{ width: `${profile.xp % 80 / 80 * 100}%` }} /></div><span>{80 - profile.xp % 80} XP to next</span></div><div className="reward-actions"><button className="secondary-action" onClick={() => setScreen('backpack')}>Backpack</button><button className="secondary-action" onClick={chooseNewQuest}>New quest here</button><button className="primary-action" onClick={() => setScreen('map')}>World map <span>→</span></button></div></div>
         </section>
       )}
 
@@ -549,7 +708,7 @@ export default function Home() {
       )}
 
       {screen === 'settings' && (
-        <section className="content-screen settings-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Make K World yours</span><h2>Sound & accessibility</h2><p>Choose what makes exploring feel best.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div><div className="settings-grid"><SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" /><SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" /><SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" /><article className="setting-card speech-speed"><span>▶</span><div><h3>Narration speed</h3><p>{profile.speechRate < .85 ? 'Slow and steady' : profile.speechRate > 1.05 ? 'A little faster' : 'Comfortable pace'}</p><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /></div><strong>{profile.speechRate.toFixed(2)}×</strong></article><SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" /><SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" /><SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" /><article className="setting-card age-setting"><span>{profile.age || '—'}</span><div><h3>Adventure age</h3><p>Change the level of stories and challenges.</p><select value={profile.age ?? ''} onChange={(event) => { const age = event.target.value as AgeGroup; setSelectedAge(age); updateProfile({ age }); }}><option value="" disabled>Choose age</option>{ageGroups.map((group) => <option key={group.range}>{group.range}</option>)}</select></div></article></div></section>
+        <section className="content-screen settings-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Make K World yours</span><h2>Sound & accessibility</h2><p>Choose what makes exploring feel best.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div><div className="settings-grid"><SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" /><SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" /><SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" /><article className="setting-card speech-speed"><span>▶</span><div><h3>Narration speed</h3><p>{profile.speechRate < .85 ? 'Slow and steady' : profile.speechRate > 1.05 ? 'A little faster' : 'Comfortable pace'}</p><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /></div><strong>{profile.speechRate.toFixed(2)}×</strong></article><SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" /><SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" /><SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" /><article className="setting-card age-setting"><span>{profile.age || '—'}</span><div><h3>Adventure age</h3><p>Change the level of stories and challenges.</p><select value={profile.age ?? ''} onChange={(event) => { const age = event.target.value as AgeGroup; setSelectedAge(age); updateProfile({ age }); }}><option value="" disabled>Choose age</option>{ageGroups.map((group) => <option key={group.range}>{group.range}</option>)}</select></div></article><article className="setting-card character-setting"><span>☺</span><div><h3>Character selection</h3><p>Change your hero, class, nickname, outfit, or companion without losing progress.</p></div><button onClick={() => setScreen('character')}>Change hero</button></article></div></section>
       )}
 
       {screen === 'parent' && (
@@ -561,7 +720,7 @@ export default function Home() {
 }
 
 function GameHeader({ profile, level, screen, onNavigate, onSound }: { profile: Profile; level: number; screen: Screen; onNavigate: (screen: Screen) => void; onSound: () => void }) {
-  return <header className="game-header"><button className="brand brand-button" onClick={() => onNavigate('map')}><span className="brand-mark">K</span><span>K WORLD</span></button><nav aria-label="Explorer menu"><button className={screen === 'backpack' ? 'active' : ''} onClick={() => onNavigate('backpack')}><span>◇</span>Backpack</button><button className={screen === 'progress' ? 'active' : ''} onClick={() => onNavigate('progress')}><span>↗</span>Progress</button><button className={screen === 'parent' ? 'active' : ''} onClick={() => onNavigate('parent')}><span>○</span>Grown-ups</button></nav><div className="player-hud"><button className="header-icon" onClick={onSound} aria-label={profile.sound ? 'Turn sound off' : 'Turn sound on'}>{profile.sound ? '♫' : '×'}</button><button className="header-icon" onClick={() => onNavigate('settings')} aria-label="Settings">⚙</button><div className="hud-stars"><span>★</span><strong>{profile.stars}</strong></div><div className="hud-profile"><Avatar profile={profile} small /><div><strong>{profile.nickname}</strong><span>Level {level} · {profile.explorerClass}</span></div></div></div></header>;
+  return <header className="game-header"><button className="brand brand-button" onClick={() => onNavigate('map')}><span className="brand-mark">K</span><span>K WORLD</span></button><nav aria-label="Explorer menu"><button onClick={() => onNavigate('character')}><span>☺</span>Hero</button><button className={screen === 'backpack' ? 'active' : ''} onClick={() => onNavigate('backpack')}><span>◇</span>Backpack</button><button className={screen === 'progress' ? 'active' : ''} onClick={() => onNavigate('progress')}><span>↗</span>Progress</button><button className={screen === 'parent' ? 'active' : ''} onClick={() => onNavigate('parent')}><span>○</span>Grown-ups</button></nav><div className="player-hud"><button className="header-icon" onClick={onSound} aria-label={profile.sound ? 'Turn sound off' : 'Turn sound on'}>{profile.sound ? '♫' : '×'}</button><button className="header-icon" onClick={() => onNavigate('settings')} aria-label="Settings">⚙</button><div className="hud-stars"><span>★</span><strong>{profile.stars}</strong></div><div className="hud-profile"><Avatar profile={profile} small /><div><strong>{profile.nickname}</strong><span>Level {level} · {profile.explorerClass}</span></div></div></div></header>;
 }
 
 function EmptyCollection({ text }: { text: string }) { return <div className="empty-collection"><span>✦</span><p>{text}</p></div>; }

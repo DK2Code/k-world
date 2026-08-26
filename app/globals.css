@@ -339,3 +339,16 @@ h1 em { color: var(--purple); font-weight: inherit; }
 @media (max-width: 440px) {
   .world-map { height: 570px; min-height: 570px; }.region-node { width: 113px; transform: translate(-50%,-50%) scale(.68); }.region-node:hover { transform: translate(-50%,-50%) scale(.7); }.realm-gate strong { font-size: 13px; }.realm-gate button { padding: 9px 8px; font-size: 8px; }.control-help { display: none; }.map-controls { justify-content: center; }.read-controls { margin-left: auto; }.read-controls .dock-main { font-size: 9px; }
 }
+
+/* Fresh quest rotation, restart, and hero editing */
+.quest-type { display: inline-flex; margin-top: 9px; padding: 6px 9px; color: #5c40be; background: #eee8ff; border-radius: 999px; font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+.fresh-quest-note { display: block; margin: 10px 0 9px; color: #268360; font-size: 9px; font-weight: 900; }
+.game-topbar { grid-template-columns: 50px 96px 1fr 50px; }
+.game-topbar .restart-game { width: auto; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0 10px; color: #5b43b0; background: #eee9ff; border-radius: 12px; font-size: 10px; font-weight: 900; }
+.game-topbar .restart-game span { color: inherit; font-size: 9px; letter-spacing: 0; text-transform: none; }
+.character-setting { grid-column: 1 / -1; }.character-setting > button { border: 0; padding: 11px 14px; color: white; background: var(--purple); border-radius: 11px; font-size: 10px; font-weight: 900; cursor: pointer; box-shadow: 0 3px 0 var(--deep-purple); }.character-setting > button:hover { transform: translateY(-1px); }
+.reward-actions { flex-wrap: wrap; }.reward-actions button { min-width: 130px; }
+
+@media (max-width: 760px) {
+  .game-topbar { grid-template-columns: 40px 42px 1fr 42px; gap: 6px; }.game-topbar .restart-game { width: 38px; padding: 0; font-size: 17px; }.game-topbar .restart-game span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }.quest-type { margin-top: 5px; }.reward-actions button { width: 100%; }
+}
