@@ -2,51 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { availableSkills, buildAssessmentReport, createAssessmentSession, getActivity, masteryBySkill, practiceAttempt, submitAssessmentAnswer } from '@/content/assessment.ts';
 import { isActivityCorrect } from '@/content/evaluation.ts';
+import { curriculumMap, gradeLabel, gradeLevels, gradeNumber, gradePresentation } from '@/content/grades.ts';
+import { defaultProfile, migrateProfile } from '@/content/profile.ts';
 import { selectQuestActivities, selectQuestVariant } from '@/content/rotation.ts';
-import { ageGroups, factsFor, learningResources, questVariants, regions } from '@/content/world.ts';
-import type { Activity, AgeGroup, QuestVariant, RegionId, Subject, WonderFact } from '@/content/types.ts';
+import { factsFor, learningResources, questVariants, regions } from '@/content/world.ts';
+import type { AssessmentKind, AssessmentReport } from '@/content/assessment.ts';
+import type { ProfileData } from '@/content/profile.ts';
+import type { Activity, GradeLevel, GradedActivity, QuestVariant, RegionId, Subject, WonderFact } from '@/content/types.ts';
 
-type Screen = 'welcome' | 'character' | 'intro' | 'map' | 'region' | 'game' | 'rewards' | 'backpack' | 'progress' | 'settings' | 'parent';
-
-type Profile = {
-  age: AgeGroup | null;
-  nickname: string;
-  skin: number;
-  hair: number;
-  outfit: number;
-  explorerClass: string;
-  companion: string;
-  xp: number;
-  stars: number;
-  badges: string[];
-  facts: string[];
-  items: string[];
-  completed: string[];
-  progress: Record<Subject, { correct: number; attempts: number }>;
-  sound: boolean;
-  narration: boolean;
-  narrationAuto: boolean;
-  speechRate: number;
-  reducedMotion: boolean;
-  largeText: boolean;
-  easyRead: boolean;
-  playMinutes: number;
-  worldPosition: { x: number; y: number };
-  questHistory: Record<string, string[]>;
-  questionHistory: Record<string, string[]>;
-  factHistory: Record<string, string[]>;
-};
+type Screen = 'welcome' | 'character' | 'intro' | 'map' | 'region' | 'game' | 'rewards' | 'backpack' | 'progress' | 'settings' | 'parent' | 'assessment-center' | 'assessment-intro' | 'assessment' | 'assessment-paused' | 'assessment-result' | 'assessment-report' | 'mastery';
+type Profile = ProfileData;
 
 const STORE_KEY = 'kworld-adventure-v1';
-const defaultProfile: Profile = {
-  age: null, nickname: 'Nova', skin: 1, hair: 0, outfit: 0, explorerClass: 'Scientist', companion: 'Fox',
-  xp: 0, stars: 0, badges: [], facts: [], items: [], completed: [],
-  progress: { science: { correct: 0, attempts: 0 }, math: { correct: 0, attempts: 0 }, english: { correct: 0, attempts: 0 } },
-  sound: true, narration: false, narrationAuto: false, speechRate: 0.9, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
-  worldPosition: { x: 48, y: 20 },
-  questHistory: {}, questionHistory: {}, factHistory: {},
-};
 
 const nicknames = ['Nova', 'Sunny Star', 'Clever Fox', 'Mighty Maple'];
 const classes = [
@@ -64,6 +33,20 @@ function mastery(correct: number, attempts: number) {
   if (correct >= 6 && ratio >= .8) return 'Quest Master';
   if (correct >= 3 && ratio >= .6) return 'Confident';
   return 'Growing';
+}
+
+function assessmentTrend(report: AssessmentReport, history: AssessmentReport[]) {
+  const earlier = history
+    .filter((item) => item.id !== report.id && item.grade === report.grade && item.kind === report.kind && item.subject === report.subject && (report.kind !== 'skill' || item.title === report.title) && item.completedAt < report.completedAt)
+    .sort((left, right) => left.completedAt.localeCompare(right.completedAt))
+    .at(-1);
+  if (!earlier) return { label: 'First check', detail: 'This result creates a starting point for future comparisons.' };
+  const currentRate = report.attempts ? report.correct / report.attempts : 0;
+  const earlierRate = earlier.attempts ? earlier.correct / earlier.attempts : 0;
+  const change = Math.round((currentRate - earlierRate) * 100);
+  if (change >= 5) return { label: 'Growing', detail: `${change} percentage points higher than the previous comparable Skill Check.` };
+  if (change <= -5) return { label: 'Needs a revisit', detail: `${Math.abs(change)} percentage points lower than the previous comparable Skill Check; try the suggested practice quests.` };
+  return { label: 'Holding steady', detail: 'Similar to the previous comparable Skill Check. More varied evidence will make the trend clearer.' };
 }
 
 function shuffled<T>(items: T[]) {
@@ -101,10 +84,10 @@ export default function Home() {
   const [profile, setProfile] = useState<Profile>(defaultProfile);
   const [screen, setScreen] = useState<Screen>('welcome');
   const [hydrated, setHydrated] = useState(false);
-  const [selectedAge, setSelectedAge] = useState<AgeGroup | null>(null);
+  const [selectedGrade, setSelectedGrade] = useState<GradeLevel | null>(null);
   const [activeRegionId, setActiveRegionId] = useState<RegionId>('science');
   const [activeQuest, setActiveQuest] = useState<QuestVariant>(questVariants.science[0]);
-  const [questQuestions, setQuestQuestions] = useState<Activity[]>([]);
+  const [questQuestions, setQuestQuestions] = useState<GradedActivity[]>([]);
   const [factOpen, setFactOpen] = useState(false);
   const [activeFact, setActiveFact] = useState<WonderFact | null>(null);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -127,31 +110,44 @@ export default function Home() {
   const [matchingOptions, setMatchingOptions] = useState<string[]>([]);
   const [activeMatchLeft, setActiveMatchLeft] = useState<string | null>(null);
   const [numericAnswer, setNumericAnswer] = useState('');
+  const [assessmentAnswerLocked, setAssessmentAnswerLocked] = useState(false);
+  const [assessmentWasCorrect, setAssessmentWasCorrect] = useState(false);
+  const [assessmentHintUsed, setAssessmentHintUsed] = useState(false);
+  const [selectedAssessmentSubject, setSelectedAssessmentSubject] = useState<Subject>('math');
+  const [selectedAssessmentSkill, setSelectedAssessmentSkill] = useState('');
+  const [activeReport, setActiveReport] = useState<AssessmentReport | null>(null);
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Profile;
+        const parsed = migrateProfile(JSON.parse(saved));
         // Restoring a local-only adventure is the intended one-time hydration step.
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setProfile({ ...defaultProfile, ...parsed, progress: { ...defaultProfile.progress, ...parsed.progress } });
-        setSelectedAge(parsed.age);
-        if (parsed.age) setScreen('map');
+        setProfile(parsed);
+        setSelectedGrade(parsed.grade);
+        if (parsed.grade) setScreen('map');
       }
     } catch { /* A fresh local adventure is always safe to start. */ }
     setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (hydrated && profile.age) localStorage.setItem(STORE_KEY, JSON.stringify(profile));
+    if (hydrated) localStorage.setItem(STORE_KEY, JSON.stringify(profile));
   }, [profile, hydrated]);
 
   const level = levelFromXp(profile.xp);
   const activeRegion = regions.find((region) => region.id === activeRegionId) ?? regions[0];
   const currentQuestions = questQuestions;
   const currentQuestion = currentQuestions[questionIndex];
+  const activeAssessment = profile.activeAssessment;
+  const assessmentActivity = getActivity(activeAssessment?.currentActivityId);
+  const gradeMastery = useMemo(() => masteryBySkill([...profile.practiceAttempts, ...profile.assessmentAttempts].filter((attempt) => attempt.grade === profile.grade)), [profile.assessmentAttempts, profile.grade, profile.practiceAttempts]);
+  const activeReportAttempts = useMemo(() => activeReport ? profile.assessmentAttempts.filter((attempt) => attempt.id.startsWith(`${activeReport.sessionId}-attempt-`)) : [], [activeReport, profile.assessmentAttempts]);
+  const activeReportTrend = useMemo(() => activeReport ? assessmentTrend(activeReport, profile.assessmentHistory) : null, [activeReport, profile.assessmentHistory]);
+  const assessmentSkills = useMemo(() => profile.grade ? availableSkills(profile.grade, selectedAssessmentSubject) : [], [profile.grade, selectedAssessmentSubject]);
+  const assessmentSkillId = assessmentSkills.some((skill) => skill.id === selectedAssessmentSkill) ? selectedAssessmentSkill : assessmentSkills[0]?.id ?? '';
   const nearbyRegion = useMemo(() => regions.find((region) => {
     const dx = region.position.x - profile.worldPosition.x;
     const dy = region.position.y - profile.worldPosition.y;
@@ -196,7 +192,7 @@ export default function Home() {
   };
 
   const screenNarration = useMemo(() => {
-    if (screen === 'welcome') return 'Welcome to K World! Choose your age group so every adventure is just right for you. Ages five to seven. Ages eight to ten. Or ages eleven to thirteen.';
+    if (screen === 'welcome') return 'Welcome to K World! Choose Kindergarten or a grade from one through twelve so every adventure matches what you are learning.';
     if (screen === 'character') return 'Create your hero. Choose a skin tone, hair, outfit, explorer class, adventure nickname, and animal companion.';
     if (screen === 'intro') return `Explorer ${profile.nickname}! The Compass of Curiosity is glowing. Five realms need your questions, ideas, and courage.`;
     if (screen === 'map') return `World Explorer. Move ${profile.nickname} with the arrow keys, W A S D, or the big direction buttons. Walk close to a realm, then choose enter realm. ${regions.map((region) => `${region.name}, level ${region.level}.`).join(' ')}`;
@@ -206,8 +202,15 @@ export default function Home() {
     if (screen === 'backpack') return `Explorer backpack. You have ${profile.facts.length} wonder facts, ${profile.items.length} quest treasures, and ${profile.badges.length} badges.`;
     if (screen === 'progress') return `${profile.nickname}'s progress. Level ${level}. ${profile.xp} explorer points and ${profile.stars} stars.`;
     if (screen === 'settings') return 'Sound and accessibility settings. You can turn on read aloud, automatic narration, slower or faster speech, reduced motion, larger words, and easy-read type.';
+    if (screen === 'assessment-center') return `Explorer Skill Check. Choose a short, untimed assessment for ${profile.grade ? gradeLabel(profile.grade) : 'your grade'}.`;
+    if (screen === 'assessment-intro' && activeAssessment) return `${activeAssessment.title}. This untimed check has about ${activeAssessment.targetCount} clues. You can pause whenever you need.`;
+    if (screen === 'assessment' && assessmentActivity) return activityNarration(assessmentActivity);
+    if (screen === 'assessment-paused') return 'Your Compass Assessment is paused and safely saved on this device.';
+    if (screen === 'assessment-result' && activeReport) return `Skill Check complete. You explored ${activeReport.skills.length} learning areas. Your next quests are ready.`;
+    if (screen === 'assessment-report') return 'Detailed learning report. This report shows K World activity only and is not an official school or diagnostic assessment.';
+    if (screen === 'mastery') return 'Skill mastery dashboard. Review adventure strengths, growing skills, and recommended next quests.';
     return 'Grown-up corner. This private summary shows learning activity saved on this device.';
-  }, [activeQuest, activeRegion, currentQuestion, level, profile, reward, screen]);
+  }, [activeAssessment, activeQuest, activeRegion, activeReport, assessmentActivity, currentQuestion, level, profile, reward, screen]);
 
   useEffect(() => {
     if (profile.narration && profile.narrationAuto) speak(screenNarration, true);
@@ -217,8 +220,9 @@ export default function Home() {
   }, [profile.narration, profile.narrationAuto, questionIndex, screen, screenNarration, speak]);
 
   const beginAdventure = () => {
-    if (!selectedAge) return;
-    updateProfile({ age: selectedAge, narration: selectedAge === '5–7', narrationAuto: selectedAge === '5–7' });
+    if (!selectedGrade) return;
+    const presentation = gradePresentation(selectedGrade);
+    updateProfile({ grade: selectedGrade, narration: presentation.narrationDefault, narrationAuto: presentation.narrationDefault });
     setScreen('character');
   };
 
@@ -232,18 +236,19 @@ export default function Home() {
   };
 
   const prepareQuest = useCallback((id: RegionId) => {
-    const age = profile.age ?? '8–10';
+    const grade = profile.grade ?? '3';
+    const historyKey = `${grade}:${id}`;
     const questSelection = selectQuestVariant(id, profile.questHistory[id] ?? []);
-    const activitySelection = selectQuestActivities(age, id, profile.questionHistory[id] ?? []);
+    const activitySelection = selectQuestActivities(grade, id, profile.questionHistory[historyKey] ?? []);
     setActiveQuest(questSelection.quest);
     setQuestQuestions(activitySelection.activities);
     setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0);
     setProfile((current) => ({
       ...current,
       questHistory: { ...current.questHistory, [id]: questSelection.history },
-      questionHistory: { ...current.questionHistory, [id]: activitySelection.history },
+      questionHistory: { ...current.questionHistory, [historyKey]: activitySelection.history },
     }));
-  }, [profile.age, profile.questionHistory, profile.questHistory]);
+  }, [profile.grade, profile.questionHistory, profile.questHistory]);
 
   const enterRegion = useCallback((id: RegionId) => {
     const region = regions.find((item) => item.id === id);
@@ -280,7 +285,7 @@ export default function Home() {
 
   useEffect(() => {
     if (screen !== 'map') return;
-    const step = profile.age === '5–7' ? 6 : 4;
+    const step = profile.grade && gradeNumber(profile.grade) <= 2 ? 6 : 4;
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.matches('input, select, textarea')) return;
@@ -295,12 +300,12 @@ export default function Home() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [enterRegion, jumpHero, level, moveHero, nearbyRegion, profile.age, screen]);
+  }, [enterRegion, jumpHero, level, moveHero, nearbyRegion, profile.grade, screen]);
 
   const discoverFact = () => {
-    const age = profile.age ?? '8–10';
-    const pool = factsFor(age, activeRegion.id);
-    const historyKey = `${age}:${activeRegion.id}`;
+    const grade = profile.grade ?? '3';
+    const pool = factsFor(grade, activeRegion.id);
+    const historyKey = `${grade}:${activeRegion.id}`;
     const validIds = new Set(pool.map((fact) => fact.id));
     const validHistory = (profile.factHistory[historyKey] ?? []).filter((id) => validIds.has(id));
     let available = pool.filter((fact) => !validHistory.includes(fact.id));
@@ -356,9 +361,10 @@ export default function Home() {
     if (correctAnswer) return;
     setSelectedAnswer(answerLabel);
     const subject = currentQuestion.subject;
+    const learningAttempt = practiceAttempt(currentQuestion, isCorrect, showHint);
     setProfile((current) => {
       const subjectProgress = current.progress[subject];
-      return { ...current, progress: { ...current.progress, [subject]: { attempts: subjectProgress.attempts + 1, correct: subjectProgress.correct + (isCorrect ? 1 : 0) } } };
+      return { ...current, practiceAttempts: [...current.practiceAttempts, learningAttempt], progress: { ...current.progress, [subject]: { attempts: subjectProgress.attempts + 1, correct: subjectProgress.correct + (isCorrect ? 1 : 0) } } };
     });
     if (isCorrect) { setCorrectAnswer(true); setScore((value) => value + 1); playTone(); speak(`Correct! ${currentQuestion.explanation}`); }
     else { playTone(false); speak(`Good thinking. Try once more. ${currentQuestion.hint}`); }
@@ -410,14 +416,79 @@ export default function Home() {
     const next = questionIndex + 1; setQuestionIndex(next); resetActivityInteraction(currentQuestions[next]); speak(activityNarration(currentQuestions[next]));
   };
 
+  const resetAssessmentInteraction = (activity?: GradedActivity) => {
+    resetActivityInteraction(activity);
+    setAssessmentAnswerLocked(false); setAssessmentWasCorrect(false); setAssessmentHintUsed(false);
+  };
+
+  const openAssessment = (kind: AssessmentKind, subject?: Subject, skillId?: string) => {
+    if (!profile.grade) { setScreen('welcome'); return; }
+    const recentQuestIds = Object.entries(profile.questionHistory).filter(([key]) => key.startsWith(`${profile.grade}:`)).flatMap(([, ids]) => ids).slice(-18);
+    const session = createAssessmentSession({ grade: profile.grade, kind, subject, skillId, recentQuestIds });
+    updateProfile({ activeAssessment: session });
+    setActiveReport(null); resetAssessmentInteraction(getActivity(session.currentActivityId)); setScreen('assessment-intro');
+  };
+
+  const chooseAssessmentSubject = (subject: Subject) => {
+    setSelectedAssessmentSubject(subject);
+    setSelectedAssessmentSkill(profile.grade ? availableSkills(profile.grade, subject)[0]?.id ?? '' : '');
+  };
+
+  const beginAssessment = () => {
+    if (!activeAssessment || !assessmentActivity) return;
+    const resumed = { ...activeAssessment, paused: false, updatedAt: new Date().toISOString() };
+    updateProfile({ activeAssessment: resumed }); resetAssessmentInteraction(assessmentActivity); setScreen('assessment');
+  };
+
+  const pauseAssessment = () => {
+    if (!activeAssessment || assessmentAnswerLocked) return;
+    updateProfile({ activeAssessment: { ...activeAssessment, paused: true, updatedAt: new Date().toISOString() } });
+    stopSpeech(); setScreen('assessment-paused');
+  };
+
+  const assessmentResponse = (response: string | boolean | string[] | Record<string, string>) => {
+    if (!assessmentActivity || assessmentAnswerLocked) return;
+    setSelectedAnswer(typeof response === 'string' ? response : 'response recorded');
+    setAssessmentWasCorrect(isActivityCorrect(assessmentActivity, response));
+    setAssessmentAnswerLocked(true); stopSpeech();
+  };
+
+  const assessmentChoice = (choice: string | boolean) => assessmentResponse(choice);
+  const submitAssessmentStructured = () => {
+    if (!assessmentActivity) return;
+    if (assessmentActivity.activityType === 'ordering') assessmentResponse(orderItems);
+    if (assessmentActivity.activityType === 'matching') assessmentResponse(matchingAnswers);
+    if (assessmentActivity.activityType === 'numeric') assessmentResponse(numericAnswer);
+  };
+
+  const continueAssessment = () => {
+    if (!activeAssessment || !assessmentActivity || !assessmentAnswerLocked) return;
+    const result = submitAssessmentAnswer(activeAssessment, assessmentActivity, assessmentWasCorrect, assessmentHintUsed);
+    if (result.complete) {
+      const report = buildAssessmentReport(result.session);
+      setProfile((current) => ({ ...current, activeAssessment: null, assessmentAttempts: [...current.assessmentAttempts, result.attempt], assessmentHistory: [...current.assessmentHistory, report], playMinutes: current.playMinutes + report.minutes }));
+      setActiveReport(report); resetAssessmentInteraction(); setScreen('assessment-result');
+    } else {
+      setProfile((current) => ({ ...current, activeAssessment: result.session, assessmentAttempts: [...current.assessmentAttempts, result.attempt] }));
+      resetAssessmentInteraction(getActivity(result.session.currentActivityId));
+    }
+  };
+
+  const restartAssessment = () => {
+    if (!activeAssessment) return;
+    openAssessment(activeAssessment.kind, activeAssessment.subject, activeAssessment.skillId);
+  };
+
+  const viewReport = (report: AssessmentReport) => { setActiveReport(report); setScreen('assessment-report'); };
+
   const resetAdventure = () => {
-    localStorage.removeItem(STORE_KEY); setProfile(defaultProfile); setSelectedAge(null); setScreen('welcome'); setParentUnlocked(false);
+    localStorage.removeItem(STORE_KEY); setProfile(defaultProfile); setSelectedGrade(null); setScreen('welcome'); setParentUnlocked(false);
   };
 
   const accessibilityClasses = [profile.reducedMotion ? 'reduce-motion' : '', profile.largeText ? 'large-text' : '', profile.easyRead ? 'easy-read' : ''].join(' ');
 
   return (
-    <main className={`game-app screen-${screen} ${accessibilityClasses}`}>
+    <main className={`game-app screen-${screen} grade-${profile.grade ? gradePresentation(profile.grade).density : 'early'} ${accessibilityClasses}`}>
       {screen === 'welcome' && (
         <section className="welcome-shell">
           <header className="welcome-nav">
@@ -428,17 +499,18 @@ export default function Home() {
           <div className="welcome-content">
             <div className="onboarding-panel">
               <div className="eyebrow"><span>✦</span> Your adventure starts here</div>
-              <h1>How old is our<br /><em>new explorer?</em></h1>
-              <p className="intro">We’ll shape every story, puzzle, and discovery to be just right for you.</p>
+              <h1>Choose your<br /><em>adventure grade.</em></h1>
+              <p className="intro">Every quest will match what you’re learning—from Kindergarten through Grade 12.</p>
+              {profile.legacyAgeGroup && !profile.grade && <p className="migration-note"><strong>Your explorer is safe.</strong> Choose a grade once to continue with all existing stars, XP, character items, and settings.</p>}
               <ReadButton label="Read welcome aloud" onRead={() => speak(screenNarration, true)} />
-              <div className="age-grid" role="radiogroup" aria-label="Choose your age range">
-                {ageGroups.map((group) => (
-                  <button key={group.range} type="button" role="radio" aria-checked={selectedAge === group.range} className={`age-card ${group.color} ${selectedAge === group.range ? 'selected' : ''}`} onClick={() => setSelectedAge(group.range)}>
-                    <span className="age-number">{group.range}</span><span className="age-label">{group.label}</span><span className="age-note">{group.note}</span><span className="card-check" aria-hidden="true">✓</span>
+              <div className="grade-grid" role="radiogroup" aria-label="Choose your school grade">
+                {gradeLevels.map((option) => (
+                  <button key={option.grade} type="button" role="radio" aria-checked={selectedGrade === option.grade} className={`grade-card ${selectedGrade === option.grade ? 'selected' : ''}`} onClick={() => setSelectedGrade(option.grade)}>
+                    <span className="grade-number">{option.grade}</span><span><strong>{option.label}</strong><small>{option.stage}</small></span><span className="card-check" aria-hidden="true">✓</span>
                   </button>
                 ))}
               </div>
-              <button className="begin-button" type="button" disabled={!selectedAge} onClick={beginAdventure}>Begin my quest <span aria-hidden="true">→</span></button>
+              <button className="begin-button" type="button" disabled={!selectedGrade} onClick={beginAdventure}>Begin my quest <span aria-hidden="true">→</span></button>
               <p className="privacy-note"><span aria-hidden="true">♡</span> No real name or personal details needed. Your adventure stays on this device.</p>
             </div>
             <div className="world-preview" aria-hidden="true">
@@ -485,11 +557,11 @@ export default function Home() {
         </section>
       )}
 
-      {['map', 'region', 'backpack', 'progress', 'settings', 'parent'].includes(screen) && screen !== 'welcome' && <GameHeader profile={profile} level={level} screen={screen} onNavigate={setScreen} onSound={() => updateProfile({ sound: !profile.sound })} />}
+      {['map', 'region', 'backpack', 'progress', 'settings', 'parent', 'assessment-center', 'mastery', 'assessment-report'].includes(screen) && <GameHeader profile={profile} level={level} screen={screen} onNavigate={setScreen} onSound={() => updateProfile({ sound: !profile.sound })} />}
 
       {screen === 'map' && (
         <section className="map-screen">
-          <div className="map-heading"><div><span className="eyebrow"><span>✦</span> Playable world explorer</span><h2>Adventure is this way, {profile.nickname}!</h2><p>Walk to a realm with arrow keys, W A S D, or the touch controls.</p></div><div className="daily-card"><span>✦</span><div><small>Explorer streak</small><strong>{Math.max(1, new Set(profile.completed).size)} bright day{new Set(profile.completed).size === 1 ? '' : 's'}</strong></div></div></div>
+          <div className="map-heading"><div><span className="eyebrow"><span>✦</span> {profile.grade ? gradeLabel(profile.grade) : 'World'} explorer</span><h2>Adventure is this way, {profile.nickname}!</h2><p>Walk to a realm, or visit the Compass Assessment for a short learning check.</p></div><div className="map-heading-actions"><button className="assessment-map-button" onClick={() => setScreen('assessment-center')}><span>⌁</span><strong>Explorer Skill Check</strong><small>Untimed · saved locally</small></button><div className="daily-card"><span>✦</span><div><small>Explorer streak</small><strong>{Math.max(1, new Set(profile.completed).size)} bright day{new Set(profile.completed).size === 1 ? '' : 's'}</strong></div></div></div></div>
           <div className="world-map" tabIndex={0} aria-label="Playable K World map. Move with arrow keys or W A S D.">
             <div className="map-water-lines" /><div className="map-cloud mc-one" /><div className="map-cloud mc-two" />
             <div className="trail trail-one" /><div className="trail trail-two" /><div className="trail trail-three" /><div className="trail trail-four" />
@@ -508,7 +580,7 @@ export default function Home() {
             </div>}
             <div className="compass" aria-hidden="true"><b>N</b><i /></div>
           </div>
-          <div className="map-controls" aria-label="World movement controls"><div className="control-help"><strong>Move your hero</strong><span>Arrow keys / W A S D · Space to jump · Enter a nearby realm</span></div><div className="d-pad"><button aria-label="Move up" onClick={() => moveHero(0, profile.age === '5–7' ? -6 : -4)}>▲</button><button aria-label="Move left" onClick={() => moveHero(profile.age === '5–7' ? -6 : -4, 0)}>◀</button><button className="jump-control" aria-label="Jump" onClick={jumpHero}>JUMP</button><button aria-label="Move right" onClick={() => moveHero(profile.age === '5–7' ? 6 : 4, 0)}>▶</button><button aria-label="Move down" onClick={() => moveHero(0, profile.age === '5–7' ? 6 : 4)}>▼</button></div></div>
+          <div className="map-controls" aria-label="World movement controls"><div className="control-help"><strong>Move your hero</strong><span>Arrow keys / W A S D · Space to jump · Enter a nearby realm</span></div><div className="d-pad"><button aria-label="Move up" onClick={() => moveHero(0, profile.grade && gradeNumber(profile.grade) <= 2 ? -6 : -4)}>▲</button><button aria-label="Move left" onClick={() => moveHero(profile.grade && gradeNumber(profile.grade) <= 2 ? -6 : -4, 0)}>◀</button><button className="jump-control" aria-label="Jump" onClick={jumpHero}>JUMP</button><button aria-label="Move right" onClick={() => moveHero(profile.grade && gradeNumber(profile.grade) <= 2 ? 6 : 4, 0)}>▶</button><button aria-label="Move down" onClick={() => moveHero(0, profile.grade && gradeNumber(profile.grade) <= 2 ? 6 : 4)}>▼</button></div></div>
           <p className="map-tip"><span>✦</span> Walk near a realm to enter. Mistakes never cost lives or progress.</p>
         </section>
       )}
@@ -542,7 +614,7 @@ export default function Home() {
             </aside>
             <div className="question-card">
               <span className="question-kicker">{activeRegion.name} · {activeQuest.title} · Challenge {questionIndex + 1}</span><div className="question-with-audio"><h2>{currentQuestion.prompt}</h2><ReadButton label="Read question and answers aloud" onRead={() => speak(screenNarration, true)} /></div>
-              <ActivityResponse activity={currentQuestion} correct={correctAnswer} selectedAnswer={selectedAnswer} orderItems={orderItems} matchingAnswers={matchingAnswers} matchingOptions={matchingOptions} activeMatchLeft={activeMatchLeft} numericAnswer={numericAnswer} onChoice={answerChoice} onMoveOrder={moveOrderItem} onSelectMatchLeft={(value) => { setActiveMatchLeft(value); setSelectedAnswer(null); }} onChooseMatch={chooseMatch} onNumericChange={(value) => { setNumericAnswer(value); setSelectedAnswer(null); }} onSubmit={submitStructuredAnswer} onRead={(text) => speak(text, true)} />
+              <ActivityResponse activity={currentQuestion} correct={correctAnswer} locked={correctAnswer} selectedAnswer={selectedAnswer} orderItems={orderItems} matchingAnswers={matchingAnswers} matchingOptions={matchingOptions} activeMatchLeft={activeMatchLeft} numericAnswer={numericAnswer} onChoice={answerChoice} onMoveOrder={moveOrderItem} onSelectMatchLeft={(value) => { setActiveMatchLeft(value); setSelectedAnswer(null); }} onChooseMatch={chooseMatch} onNumericChange={(value) => { setNumericAnswer(value); setSelectedAnswer(null); }} onSubmit={submitStructuredAnswer} onRead={(text) => speak(text, true)} />
               {!correctAnswer && !selectedAnswer && <button className="hint-button" onClick={() => setShowHint(true)}>◇ Need a hint?</button>}
               {showHint && !correctAnswer && <div className="hint-panel"><strong>Try this:</strong> {currentQuestion.hint}<ReadButton label="Read hint aloud" onRead={() => speak(currentQuestion.hint, true)} /></div>}
               {selectedAnswer && !correctAnswer && <div className="feedback-panel try-again"><strong>Good thinking—let’s look once more.</strong><span>{currentQuestion.hint}</span></div>}
@@ -563,24 +635,104 @@ export default function Home() {
       )}
 
       {screen === 'progress' && (
-        <section className="content-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Growing every quest</span><h2>{profile.nickname}’s progress</h2><p>There are no grades here—just skills getting stronger.</p></div><button className="secondary-action" onClick={() => setScreen('map')}>← Back to map</button></div><div className="progress-overview"><div className="level-medallion"><span>{level}</span><small>Explorer level</small></div><div><strong>{profile.xp} XP earned</strong><p>{profile.completed.length} quests played · {profile.facts.length} facts found · {profile.stars} stars</p><div className="level-progress"><div><i style={{ width: `${profile.xp % 80 / 80 * 100}%` }} /></div><span>{80 - profile.xp % 80} XP until level {level + 1}</span></div></div></div><div className="subject-progress-grid">{(['science', 'math', 'english'] as Subject[]).map((subject) => { const data = profile.progress[subject]; const percent = data.attempts ? Math.round(data.correct / data.attempts * 100) : 0; return <article key={subject} className={`subject-card subject-${subject}`}><span className="subject-icon">{subject === 'science' ? '✿' : subject === 'math' ? '∑' : 'Aa'}</span><h3>{subject[0].toUpperCase() + subject.slice(1)}</h3><strong>{mastery(data.correct, data.attempts)}</strong><div><i style={{ width: `${percent}%` }} /></div><small>{data.correct} discoveries from {data.attempts} tries</small><p>{subject === 'science' ? 'Observe, classify, and explain the living world.' : subject === 'math' ? 'Use numbers, shapes, patterns, and logic.' : 'Read closely, choose words, and build stories.'}</p></article>; })}</div></section>
+        <section className="content-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Growing every quest</span><h2>{profile.nickname}’s progress</h2><p>No report-card scores or rankings—just skills getting stronger.</p></div><button className="secondary-action" onClick={() => setScreen('map')}>← Back to map</button></div><div className="progress-overview"><div className="level-medallion"><span>{level}</span><small>Explorer level</small></div><div><strong>{profile.xp} XP earned</strong><p>{profile.completed.length} quests played · {profile.facts.length} facts found · {profile.stars} stars</p><div className="level-progress"><div><i style={{ width: `${profile.xp % 80 / 80 * 100}%` }} /></div><span>{80 - profile.xp % 80} XP until level {level + 1}</span></div></div></div><div className="subject-progress-grid">{(['science', 'math', 'english'] as Subject[]).map((subject) => { const data = profile.progress[subject]; const percent = data.attempts ? Math.round(data.correct / data.attempts * 100) : 0; return <article key={subject} className={`subject-card subject-${subject}`}><span className="subject-icon">{subject === 'science' ? '✿' : subject === 'math' ? '∑' : 'Aa'}</span><h3>{subject[0].toUpperCase() + subject.slice(1)}</h3><strong>{mastery(data.correct, data.attempts)}</strong><div><i style={{ width: `${percent}%` }} /></div><small>{data.correct} discoveries from {data.attempts} tries</small><p>{subject === 'science' ? 'Observe, classify, and explain the living world.' : subject === 'math' ? 'Use numbers, shapes, patterns, and logic.' : 'Read closely, choose words, and build stories.'}</p></article>; })}</div></section>
       )}
 
       {screen === 'settings' && (
-        <section className="content-screen settings-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Make K World yours</span><h2>Sound & accessibility</h2><p>Choose what makes exploring feel best.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div><div className="settings-grid"><SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" /><SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" /><SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" /><article className="setting-card speech-speed"><span>▶</span><div><h3>Narration speed</h3><p>{profile.speechRate < .85 ? 'Slow and steady' : profile.speechRate > 1.05 ? 'A little faster' : 'Comfortable pace'}</p><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /></div><strong>{profile.speechRate.toFixed(2)}×</strong></article><SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" /><SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" /><SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" /><article className="setting-card age-setting"><span>{profile.age || '—'}</span><div><h3>Adventure age</h3><p>Change the level of stories and challenges.</p><select value={profile.age ?? ''} onChange={(event) => { const age = event.target.value as AgeGroup; setSelectedAge(age); updateProfile({ age }); }}><option value="" disabled>Choose age</option>{ageGroups.map((group) => <option key={group.range}>{group.range}</option>)}</select></div></article><article className="setting-card character-setting"><span>☺</span><div><h3>Character selection</h3><p>Change your hero, class, nickname, outfit, or companion without losing progress.</p></div><button onClick={() => setScreen('character')}>Change hero</button></article></div></section>
+        <section className="content-screen settings-screen">
+          <div className="content-heading"><div><span className="eyebrow"><span>✦</span> Make K World yours</span><h2>Sound & accessibility</h2><p>Choose what makes exploring feel best.</p></div><button className="secondary-action" onClick={() => setScreen(profile.grade ? 'map' : 'welcome')}>← Back</button></div>
+          <div className="settings-grid">
+            <SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" />
+            <SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" />
+            <SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" />
+            <article className="setting-card speech-speed"><span>▶</span><div><h3>Narration speed</h3><p>{profile.speechRate < .85 ? 'Slow and steady' : profile.speechRate > 1.05 ? 'A little faster' : 'Comfortable pace'}</p><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /></div><strong>{profile.speechRate.toFixed(2)}×</strong></article>
+            <SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" />
+            <SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" />
+            <SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" />
+            <article className="setting-card grade-summary-setting"><span>{profile.grade ?? '—'}</span><div><h3>{profile.grade ? gradeLabel(profile.grade) : 'Grade not selected'}</h3><p>A grown-up can change the curriculum grade from the protected Grown-up Corner.</p></div></article>
+            <article className="setting-card character-setting"><span>☺</span><div><h3>Character selection</h3><p>Change your hero, class, nickname, outfit, or companion without losing progress.</p></div><button onClick={() => setScreen('character')}>Change hero</button></article>
+          </div>
+        </section>
+      )}
+
+      {screen === 'assessment-center' && profile.grade && (
+        <section className="content-screen assessment-center-screen">
+          <div className="content-heading"><div><span className="eyebrow"><span>⌁</span> Compass Assessment</span><h2>Explorer Skill Check</h2><p>Short, untimed learning checks for {gradeLabel(profile.grade)}. Pause whenever you need.</p></div><button className="secondary-action" onClick={() => setScreen('map')}>← World map</button></div>
+          {activeAssessment && !activeAssessment.completedAt && <article className="resume-assessment"><span>⌁</span><div><small>Saved on this device</small><h3>{activeAssessment.title}</h3><p>{activeAssessment.attempts.length} of {activeAssessment.targetCount} clues completed.</p></div><button onClick={() => { setActiveReport(null); resetAssessmentInteraction(assessmentActivity); setScreen(activeAssessment.paused ? 'assessment-paused' : 'assessment-intro'); }}>Resume</button></article>}
+          <div className="assessment-option-grid">
+            <article className="assessment-option featured"><span>⌁</span><small>All three subjects · about {gradePresentation(profile.grade).assessmentLength} clues</small><h3>Grade-level Compass Check</h3><p>Explore a balanced mix of mathematics, science, and English skills.</p><button onClick={() => openAssessment('general')}>Start general assessment</button></article>
+            {(['science', 'math', 'english'] as Subject[]).map((subject) => <article className={`assessment-option subject-${subject}`} key={subject}><span>{subject === 'science' ? '✿' : subject === 'math' ? '∑' : 'Aa'}</span><small>Focused subject check</small><h3>{subject[0].toUpperCase() + subject.slice(1)}</h3><p>{curriculumMap[profile.grade!][subject].join(' · ')}</p><button onClick={() => openAssessment('subject', subject)}>Check {subject}</button></article>)}
+          </div>
+          <article className="skill-check-picker"><div><span className="eyebrow"><span>◇</span> Short topic check</span><h3>Focus on one skill</h3><p>Choose a subject and one curriculum area for a three-clue check.</p></div><div><label>Subject<select value={selectedAssessmentSubject} onChange={(event) => chooseAssessmentSubject(event.target.value as Subject)}>{(['science', 'math', 'english'] as Subject[]).map((subject) => <option key={subject}>{subject}</option>)}</select></label><label>Skill<select value={assessmentSkillId} onChange={(event) => setSelectedAssessmentSkill(event.target.value)}>{assessmentSkills.map((skill) => <option key={skill.id} value={skill.id}>{skill.topic}</option>)}</select></label><button disabled={!assessmentSkillId} onClick={() => openAssessment('skill', selectedAssessmentSubject, assessmentSkillId)}>Start skill check</button></div></article>
+          <p className="assessment-disclaimer">Results describe K World activity only. They are not an official school, medical, psychological, or diagnostic assessment.</p>
+        </section>
+      )}
+
+      {screen === 'assessment-intro' && activeAssessment && (
+        <section className="assessment-shell assessment-intro-screen"><div className="assessment-constellation" aria-hidden="true">⌁ · ✦ · ◇</div><article><span className="assessment-compass">⌁</span><small>{gradeLabel(activeAssessment.grade)} · {activeAssessment.kind === 'general' ? 'Balanced subjects' : activeAssessment.subject ?? 'Focused skill'}</small><h1>{activeAssessment.title}</h1><p>This is a friendly learning snapshot—not a race. You’ll see about {activeAssessment.targetCount} clues, and you can pause at any time.</p><ul><li>Untimed</li><li>Hints are welcome</li><li>Read-aloud available</li><li>Saved only on this device</li></ul><ReadButton label="Read assessment introduction aloud" onRead={() => speak(screenNarration, true)} /><div><button className="secondary-action" onClick={() => { updateProfile({ activeAssessment: null }); setScreen('assessment-center'); }}>Choose another check</button><button className="primary-action" onClick={beginAssessment}>{activeAssessment.attempts.length ? 'Continue check' : 'Begin Skill Check'} <span>→</span></button></div></article></section>
+      )}
+
+      {screen === 'assessment' && activeAssessment && assessmentActivity && (
+        <section className={`game-screen assessment-game game-${assessmentActivity.subject}`}>
+          <header className="assessment-topbar"><button onClick={pauseAssessment} disabled={assessmentAnswerLocked}>Pause & save</button><div><span>{activeAssessment.title}</span><strong>Clue {activeAssessment.attempts.length + 1} of {activeAssessment.targetCount}</strong><div><i style={{ width: `${activeAssessment.attempts.length / activeAssessment.targetCount * 100}%` }} /></div></div><em>Untimed</em></header>
+          <div className="assessment-layout"><aside><span>{assessmentActivity.token}</span><small>{assessmentActivity.subject}</small><strong>{assessmentActivity.topic}</strong><p>Take your time. Curiosity matters more than speed.</p></aside><div className="question-card assessment-question-card"><span className="question-kicker">Compass clue · Difficulty {assessmentActivity.difficulty ?? 2}</span><div className="question-with-audio"><h2>{assessmentActivity.prompt}</h2><ReadButton label="Read assessment clue aloud" onRead={() => speak(screenNarration, true)} /></div>
+            <ActivityResponse activity={assessmentActivity} correct={assessmentWasCorrect} locked={assessmentAnswerLocked} selectedAnswer={selectedAnswer} orderItems={orderItems} matchingAnswers={matchingAnswers} matchingOptions={matchingOptions} activeMatchLeft={activeMatchLeft} numericAnswer={numericAnswer} onChoice={assessmentChoice} onMoveOrder={moveOrderItem} onSelectMatchLeft={(value) => { setActiveMatchLeft(value); setSelectedAnswer(null); }} onChooseMatch={chooseMatch} onNumericChange={(value) => { setNumericAnswer(value); setSelectedAnswer(null); }} onSubmit={submitAssessmentStructured} onRead={(text) => speak(text, true)} />
+            {!assessmentAnswerLocked && !showHint && <button className="hint-button" onClick={() => { setShowHint(true); setAssessmentHintUsed(true); }}>◇ Show a hint</button>}
+            {showHint && !assessmentAnswerLocked && <div className="hint-panel"><strong>Helpful clue:</strong> {assessmentActivity.hint}<ReadButton label="Read hint aloud" onRead={() => speak(assessmentActivity.hint, true)} /></div>}
+            {assessmentAnswerLocked && <div className="feedback-panel assessment-recorded" aria-live="polite"><div><strong>Clue recorded.</strong><span>Thanks—let’s try the next clue. You can review learning areas when the check is complete.</span></div><button onClick={continueAssessment}>{activeAssessment.attempts.length + 1 >= activeAssessment.targetCount ? 'Finish Skill Check' : 'Next clue'} →</button></div>}
+          </div></div>
+        </section>
+      )}
+
+      {screen === 'assessment-paused' && activeAssessment && (
+        <section className="assessment-shell assessment-paused-screen"><article><span className="assessment-compass">Ⅱ</span><small>Saved safely on this device</small><h1>Compass paused</h1><p>You completed {activeAssessment.attempts.length} of {activeAssessment.targetCount} clues. There is no timer and no penalty for taking a break.</p><div><button className="secondary-action" onClick={() => setScreen('map')}>Return to world</button><button className="secondary-action" onClick={restartAssessment}>Restart this check</button><button className="primary-action" onClick={beginAssessment}>Resume <span>→</span></button></div></article></section>
+      )}
+
+      {screen === 'assessment-result' && activeReport && (
+        <section className="assessment-result-screen"><div className="result-stars" aria-hidden="true">✦ ◇ ✦</div><article><span className="assessment-compass">⌁</span><small>{activeReport.title} complete</small><h1>Your learning compass is glowing!</h1><p>You explored {activeReport.skills.length} learning area{activeReport.skills.length === 1 ? '' : 's'} and completed {activeReport.attempts} thoughtful clues.</p><div className="child-result-grid"><div><span>★</span><strong>Adventure Strength</strong><p>{activeReport.strongest[0] ?? 'Your willingness to investigate every clue'}</p></div><div><span>↗</span><strong>Growing Skill</strong><p>{activeReport.focusAreas[0] ?? 'Keep mixing familiar ideas with new challenges'}</p></div><div><span>⌁</span><strong>Next Quest</strong><p>Visit {regions.find((region) => region.id === activeReport.recommendedRegions[0])?.name ?? 'Puzzle Peaks'} for another useful adventure.</p></div></div><p className="effort-note">Skill Checks celebrate effort and help choose useful adventures. They never rank you against anyone else.</p><div><button className="secondary-action" onClick={() => setScreen('parent')}>Grown-up report</button><button className="secondary-action" onClick={() => setScreen('mastery')}>My skill compass</button><button className="primary-action" onClick={() => setScreen('map')}>Next adventure <span>→</span></button></div></article></section>
+      )}
+
+      {screen === 'mastery' && (
+        <section className="content-screen mastery-screen"><div className="content-heading"><div><span className="eyebrow"><span>⌁</span> Learning compass</span><h2>{profile.nickname}’s skill map</h2><p>Adventure strengths, growing skills, and useful next quests—never grades or rankings.</p></div><button className="secondary-action" onClick={() => setScreen('progress')}>← Progress</button></div>{gradeMastery.length ? <div className="mastery-grid">{gradeMastery.map((skill) => <article key={skill.skillId} className={`mastery-card mastery-${skill.label.toLowerCase().replaceAll(' ', '-')}`}><span>{skill.subject === 'science' ? '✿' : skill.subject === 'math' ? '∑' : 'Aa'}</span><small>{skill.subject}</small><h3>{skill.skillDescription}</h3><strong>{skill.label === 'Advanced' || skill.label === 'Secure' ? 'Adventure Strength' : skill.label === 'Not enough evidence' ? 'More clues needed' : 'Growing Skill'}</strong><p>{skill.evidence}</p></article>)}</div> : <EmptyCollection text="Complete quests or a Skill Check to begin drawing your skill map." />}<div className="mastery-actions"><button className="secondary-action" onClick={() => setScreen('assessment-center')}>Start Skill Check</button><button className="primary-action" onClick={() => setScreen('map')}>Recommended adventures <span>→</span></button></div></section>
+      )}
+
+      {screen === 'assessment-report' && activeReport && (
+        <section className="content-screen assessment-report-screen">
+          <div className="content-heading"><div><span className="eyebrow"><span>⌁</span> Grown-up report</span><h2>{activeReport.title}</h2><p>{gradeLabel(activeReport.grade)} · completed {new Date(activeReport.completedAt).toLocaleDateString()}</p></div><button className="secondary-action" onClick={() => setScreen('parent')}>← Grown-up Corner</button></div>
+          <div className="report-summary"><div><strong>{activeReport.correct}/{activeReport.attempts}</strong><small>Correct responses</small></div><div><strong>{activeReport.hints}</strong><small>Hints used</small></div><div><strong>{activeReport.minutes} min</strong><small>Approximate time</small></div><div><strong>{activeReport.skills.length}</strong><small>Skills observed</small></div></div>
+          <div className="report-layout">
+            <article className="report-skill-table"><h3>Skill evidence</h3>{activeReport.skills.map((skill) => <div key={skill.skillId}><span className={`mastery-pill mastery-${skill.label.toLowerCase().replaceAll(' ', '-')}`}>{skill.label}</span><div><strong>{skill.skillDescription}</strong><small>{skill.correct}/{skill.attempts} correct · {skill.hints} hints · {skill.evidence}</small></div></div>)}</article>
+            <aside><article><h3>Recent learning trend</h3><strong>{activeReportTrend?.label}</strong><p>{activeReportTrend?.detail}</p></article><article><h3>Strongest areas</h3>{activeReport.strongest.length ? <ul>{activeReport.strongest.map((item) => <li key={item}>{item}</li>)}</ul> : <p>More evidence is needed before naming a secure area.</p>}</article><article><h3>Recommended focus</h3>{activeReport.focusAreas.length ? <ul>{activeReport.focusAreas.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Continue varied practice to strengthen the evidence.</p>}</article><article><h3>Suggested next adventures</h3><ul>{activeReport.recommendedRegions.map((id) => <li key={id}>{regions.find((region) => region.id === id)?.name}</li>)}</ul></article></aside>
+          </div>
+          <article className="assessment-review"><h3>Answer review</h3><p>Explanations appear here after the Skill Check so the activity stays neutral while it is in progress.</p>{activeReportAttempts.length ? <div>{activeReportAttempts.map((attempt) => { const activity = getActivity(attempt.activityId); return <section key={attempt.id}><span className={attempt.correct ? 'review-correct' : 'review-revisit'}>{attempt.correct ? 'Understood' : 'Revisit'}</span><div><strong>{activity?.prompt}</strong><p>{activity?.explanation}</p><small>{attempt.skillDescription}{attempt.hintUsed ? ' · Hint used' : ''}</small></div></section>; })}</div> : <p>Detailed answer evidence is unavailable for this older saved report.</p>}</article>
+          <p className="assessment-disclaimer">This report reflects performance within K World only. It is not a medical, psychological, diagnostic, or official school assessment. Conclusions are limited by the number and variety of completed activities.</p>
+        </section>
       )}
 
       {screen === 'parent' && (
-        <section className="content-screen parent-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Grown-up corner</span><h2>Learning overview</h2><p>A simple, private view of this explorer’s activity.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div>{!parentUnlocked ? <div className="parent-gate"><span className="gate-icon">7 + 5</span><h3>Quick grown-up check</h3><p>What is seven plus five?</p><div><input inputMode="numeric" value={parentAnswer} onChange={(event) => setParentAnswer(event.target.value)} aria-label="Answer to grown-up check" /><button className="primary-action" onClick={() => { if (parentAnswer.trim() === '12') setParentUnlocked(true); }}>Unlock</button></div><small>This keeps little explorers inside the game.</small></div> : <div className="parent-dashboard"><div className="parent-summary"><div><span>{profile.playMinutes}</span><small>Approx. play minutes</small></div><div><span>{profile.completed.length}</span><small>Quests played</small></div><div><span>{profile.facts.length}</span><small>Facts collected</small></div></div><article className="parent-report"><h3>Concepts practiced</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(profile.progress[subject].correct, profile.progress[subject].attempts)}</span><small>{profile.progress[subject].attempts} challenge attempts</small></div>)}</article><article className="next-adventure"><span>✦</span><div><h3>Suggested next adventure</h3><p>{profile.progress.science.attempts <= profile.progress.math.attempts ? 'Visit Science Jungle to practice observing habitats and living things.' : 'Return to Number Kingdom for a fresh pattern and problem-solving quest.'}</p></div></article><article className="learning-resources"><h3>Learning resources</h3><p>These independent educational organizations informed K World’s curriculum coverage and age progression. All K World questions, passages, hints, and stories are original; no third-party lessons or assets are reproduced, and no affiliation or endorsement is implied.</p><div>{learningResources.map((resource) => <a key={resource.name} href={resource.url} target="_blank" rel="noreferrer">{resource.name}<span aria-hidden="true">↗</span></a>)}</div></article><div className="parent-actions"><button className="secondary-action" onClick={() => setScreen('settings')}>Accessibility settings</button><button className="danger-link" onClick={resetAdventure}>Reset local adventure</button></div></div>}</section>
+        <section className="content-screen parent-screen">
+          <div className="content-heading"><div><span className="eyebrow"><span>✦</span> Grown-up corner</span><h2>Learning overview</h2><p>A private view of practice and assessments saved on this device.</p></div><button className="secondary-action" onClick={() => setScreen(profile.grade ? 'map' : 'welcome')}>← Back</button></div>
+          {!parentUnlocked ? <div className="parent-gate"><span className="gate-icon">7 + 5</span><h3>Quick grown-up check</h3><p>What is seven plus five?</p><div><input inputMode="numeric" value={parentAnswer} onChange={(event) => setParentAnswer(event.target.value)} aria-label="Answer to grown-up check" /><button className="primary-action" onClick={() => { if (parentAnswer.trim() === '12') setParentUnlocked(true); }}>Unlock</button></div><small>This keeps little explorers inside the game.</small></div> : <div className="parent-dashboard">
+            <div className="parent-summary"><div><span>{profile.playMinutes}</span><small>Approx. play minutes</small></div><div><span>{profile.completed.length}</span><small>Quests played</small></div><div><span>{profile.assessmentHistory.length}</span><small>Skill checks completed</small></div></div>
+            <article className="parent-report"><h3>Concepts practiced</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(profile.progress[subject].correct, profile.progress[subject].attempts)}</span><small>{profile.progress[subject].attempts} quest attempts</small></div>)}</article>
+            <article className="next-adventure"><span>⌁</span><div><h3>Assessment snapshot</h3><p>{profile.assessmentHistory.length ? `${profile.assessmentHistory.at(-1)?.title} is ready to review.` : 'No Skill Check yet. Start with a short, untimed Compass Assessment.'}</p><button onClick={() => profile.assessmentHistory.length ? viewReport(profile.assessmentHistory.at(-1)!) : setScreen('assessment-center')}>{profile.assessmentHistory.length ? 'Open latest report' : 'Open Assessment Center'}</button></div></article>
+            <article className="grade-parent-card"><div><span>Grade</span><strong>{profile.grade ? gradeLabel(profile.grade) : 'Choose a grade'}</strong><p>Changing grade updates future quests and assessments without removing progress.</p></div><select value={profile.grade ?? ''} aria-label="Change curriculum grade" onChange={(event) => { const grade = event.target.value as GradeLevel; setSelectedGrade(grade); updateProfile({ grade }); }}><option value="" disabled>Choose grade</option>{gradeLevels.map((option) => <option key={option.grade} value={option.grade}>{option.label}</option>)}</select></article>
+            <article className="assessment-history-card"><div className="history-title"><div><h3>Assessment history</h3><p>Assessment results are separate from ordinary quest practice.</p></div><button onClick={() => setScreen('assessment-center')}>Start new check</button></div>{profile.assessmentHistory.length ? <div className="history-list">{[...profile.assessmentHistory].reverse().map((report) => { const trend = assessmentTrend(report, profile.assessmentHistory); return <button key={report.id} onClick={() => viewReport(report)}><span><strong>{report.title}</strong><small>{new Date(report.completedAt).toLocaleDateString()} · {report.attempts} clues · {report.minutes} min · {trend.label}</small></span><em>{report.correct}/{report.attempts}</em></button>; })}</div> : <EmptyCollection text="Completed Compass Assessments will appear here." />}</article>
+            <article className="learning-resources"><h3>Learning resources</h3><p>These independent educational organizations informed K World’s curriculum coverage and grade progression. All K World questions, passages, hints, and stories are original; no third-party lessons or assets are reproduced, and no affiliation or endorsement is implied.</p><div>{learningResources.map((resource) => <a key={resource.name} href={resource.url} target="_blank" rel="noreferrer">{resource.name}<span aria-hidden="true">↗</span></a>)}</div></article>
+            <p className="assessment-disclaimer">K World reports describe activity inside this game. They are not medical, psychological, diagnostic, or official school assessments.</p>
+            <div className="parent-actions"><button className="secondary-action" onClick={() => setScreen('settings')}>Accessibility settings</button><button className="danger-link" onClick={resetAdventure}>Reset local adventure</button></div>
+          </div>}
+        </section>
       )}
       <ReadAloudDock text={screenNarration} spokenText={spokenText} spokenWordIndex={spokenWordIndex} state={speechState} enabled={profile.narration} onRead={() => speak(screenNarration, true)} onToggle={toggleSpeech} onStop={stopSpeech} />
     </main>
   );
 }
 
-function ActivityResponse({ activity, correct, selectedAnswer, orderItems, matchingAnswers, matchingOptions, activeMatchLeft, numericAnswer, onChoice, onMoveOrder, onSelectMatchLeft, onChooseMatch, onNumericChange, onSubmit, onRead }: {
+function ActivityResponse({ activity, correct, locked, selectedAnswer, orderItems, matchingAnswers, matchingOptions, activeMatchLeft, numericAnswer, onChoice, onMoveOrder, onSelectMatchLeft, onChooseMatch, onNumericChange, onSubmit, onRead }: {
   activity: Activity;
   correct: boolean;
+  locked: boolean;
   selectedAnswer: string | null;
   orderItems: string[];
   matchingAnswers: Record<string, string>;
@@ -598,23 +750,23 @@ function ActivityResponse({ activity, correct, selectedAnswer, orderItems, match
   const choiceOptions = useMemo(() => activity.activityType === 'multiple-choice' ? shuffled(activity.choices) : [], [activity]);
   if (activity.activityType === 'multiple-choice') return <div className="answer-grid">{choiceOptions.map((choice, index) => {
     const isRight = correct && choice === activity.answer; const isWrong = selectedAnswer === choice && choice !== activity.answer;
-    return <div className="answer-row" key={choice}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correct} onClick={() => onChoice(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read answer ${choice} aloud`} onRead={() => onRead(choice)} /></div>;
+    return <div className="answer-row" key={choice}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={locked} onClick={() => onChoice(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read answer ${choice} aloud`} onRead={() => onRead(choice)} /></div>;
   })}</div>;
 
   if (activity.activityType === 'true-false') return <div className="answer-grid true-false-grid">{[true, false].map((choice, index) => {
     const label = choice ? 'True' : 'False'; const isRight = correct && choice === activity.answer; const isWrong = selectedAnswer === String(choice) && choice !== activity.answer;
-    return <div className="answer-row" key={label}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correct} onClick={() => onChoice(choice)}><span>{index ? 'F' : 'T'}</span>{label}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read ${label} aloud`} onRead={() => onRead(label)} /></div>;
+    return <div className="answer-row" key={label}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={locked} onClick={() => onChoice(choice)}><span>{index ? 'F' : 'T'}</span>{label}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read ${label} aloud`} onRead={() => onRead(label)} /></div>;
   })}</div>;
 
-  if (activity.activityType === 'ordering') return <div className="structured-activity"><p className="activity-instruction">Move each card until the order feels right.</p><ol className="order-list">{orderItems.map((item, index) => <li key={item}><span>{index + 1}</span><strong>{item}</strong><div><button onClick={() => onMoveOrder(index, -1)} disabled={correct || index === 0} aria-label={`Move ${item} up`}>↑</button><button onClick={() => onMoveOrder(index, 1)} disabled={correct || index === orderItems.length - 1} aria-label={`Move ${item} down`}>↓</button><ReadButton label={`Read ${item} aloud`} onRead={() => onRead(item)} /></div></li>)}</ol><button className="submit-activity" onClick={onSubmit} disabled={correct}>Check my order</button></div>;
+  if (activity.activityType === 'ordering') return <div className="structured-activity"><p className="activity-instruction">Move each card until the order feels right.</p><ol className="order-list">{orderItems.map((item, index) => <li key={item}><span>{index + 1}</span><strong>{item}</strong><div><button onClick={() => onMoveOrder(index, -1)} disabled={locked || index === 0} aria-label={`Move ${item} up`}>↑</button><button onClick={() => onMoveOrder(index, 1)} disabled={locked || index === orderItems.length - 1} aria-label={`Move ${item} down`}>↓</button><ReadButton label={`Read ${item} aloud`} onRead={() => onRead(item)} /></div></li>)}</ol><button className="submit-activity" onClick={onSubmit} disabled={locked}>Check my order</button></div>;
 
-  if (activity.activityType === 'matching') return <div className="structured-activity"><p className="activity-instruction">Choose a card on the left, then choose its match on the right.</p><div className="matching-board"><div>{activity.pairs.map((pair) => <button key={pair.left} className={activeMatchLeft === pair.left ? 'active' : matchingAnswers[pair.left] ? 'paired' : ''} onClick={() => onSelectMatchLeft(pair.left)} disabled={correct}><strong>{pair.left}</strong><small>{matchingAnswers[pair.left] ? `Matched with: ${matchingAnswers[pair.left]}` : 'Choose this card'}</small></button>)}</div><div>{matchingOptions.map((option) => <button key={option} className={Object.values(matchingAnswers).includes(option) ? 'paired' : ''} onClick={() => onChooseMatch(option)} disabled={correct || !activeMatchLeft}><strong>{option}</strong><small>{Object.values(matchingAnswers).includes(option) ? 'Matched' : activeMatchLeft ? `Match with ${activeMatchLeft}` : 'Choose a left card first'}</small></button>)}</div></div><div className="matching-actions"><ReadButton label="Read all matching choices aloud" onRead={() => onRead(activityNarration(activity))} /><button className="submit-activity" onClick={onSubmit} disabled={correct || Object.keys(matchingAnswers).length !== activity.pairs.length}>Check my matches</button></div></div>;
+  if (activity.activityType === 'matching') return <div className="structured-activity"><p className="activity-instruction">Choose a card on the left, then choose its match on the right.</p><div className="matching-board"><div>{activity.pairs.map((pair) => <button key={pair.left} className={activeMatchLeft === pair.left ? 'active' : matchingAnswers[pair.left] ? 'paired' : ''} onClick={() => onSelectMatchLeft(pair.left)} disabled={locked}><strong>{pair.left}</strong><small>{matchingAnswers[pair.left] ? `Matched with: ${matchingAnswers[pair.left]}` : 'Choose this card'}</small></button>)}</div><div>{matchingOptions.map((option) => <button key={option} className={Object.values(matchingAnswers).includes(option) ? 'paired' : ''} onClick={() => onChooseMatch(option)} disabled={locked || !activeMatchLeft}><strong>{option}</strong><small>{Object.values(matchingAnswers).includes(option) ? 'Matched' : activeMatchLeft ? `Match with ${activeMatchLeft}` : 'Choose a left card first'}</small></button>)}</div></div><div className="matching-actions"><ReadButton label="Read all matching choices aloud" onRead={() => onRead(activityNarration(activity))} /><button className="submit-activity" onClick={onSubmit} disabled={locked || Object.keys(matchingAnswers).length !== activity.pairs.length}>Check my matches</button></div></div>;
 
-  return <form className="structured-activity numeric-activity" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><label htmlFor={`numeric-${activity.id}`}>Your number</label><div><input id={`numeric-${activity.id}`} type="number" step="any" inputMode="decimal" value={numericAnswer} onChange={(event) => onNumericChange(event.target.value)} disabled={correct} aria-describedby={`numeric-help-${activity.id}`} /><span>{activity.suffix}</span><ReadButton label="Read numeric instructions aloud" onRead={() => onRead(activityNarration(activity))} /></div><small id={`numeric-help-${activity.id}`}>Numbers only. Decimals such as 2.5 are welcome.</small><button className="submit-activity" type="submit" disabled={correct || numericAnswer.trim() === ''}>Check my number</button></form>;
+  return <form className="structured-activity numeric-activity" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><label htmlFor={`numeric-${activity.id}`}>Your number</label><div><input id={`numeric-${activity.id}`} type="number" step="any" inputMode="decimal" value={numericAnswer} onChange={(event) => onNumericChange(event.target.value)} disabled={locked} aria-describedby={`numeric-help-${activity.id}`} /><span>{activity.suffix}</span><ReadButton label="Read numeric instructions aloud" onRead={() => onRead(activityNarration(activity))} /></div><small id={`numeric-help-${activity.id}`}>Numbers only. Decimals such as 2.5 are welcome.</small><button className="submit-activity" type="submit" disabled={locked || numericAnswer.trim() === ''}>Check my number</button></form>;
 }
 
 function GameHeader({ profile, level, screen, onNavigate, onSound }: { profile: Profile; level: number; screen: Screen; onNavigate: (screen: Screen) => void; onSound: () => void }) {
-  return <header className="game-header"><button className="brand brand-button" onClick={() => onNavigate('map')}><span className="brand-mark">K</span><span>K WORLD</span></button><nav aria-label="Explorer menu"><button onClick={() => onNavigate('character')}><span>☺</span>Hero</button><button className={screen === 'backpack' ? 'active' : ''} onClick={() => onNavigate('backpack')}><span>◇</span>Backpack</button><button className={screen === 'progress' ? 'active' : ''} onClick={() => onNavigate('progress')}><span>↗</span>Progress</button><button className={screen === 'parent' ? 'active' : ''} onClick={() => onNavigate('parent')}><span>○</span>Grown-ups</button></nav><div className="player-hud"><button className="header-icon" onClick={onSound} aria-label={profile.sound ? 'Turn sound off' : 'Turn sound on'}>{profile.sound ? '♫' : '×'}</button><button className="header-icon" onClick={() => onNavigate('settings')} aria-label="Settings">⚙</button><div className="hud-stars"><span>★</span><strong>{profile.stars}</strong></div><div className="hud-profile"><Avatar profile={profile} small /><div><strong>{profile.nickname}</strong><span>Level {level} · {profile.explorerClass}</span></div></div></div></header>;
+  return <header className="game-header"><button className="brand brand-button" onClick={() => onNavigate('map')}><span className="brand-mark">K</span><span>K WORLD</span></button><nav aria-label="Explorer menu"><button onClick={() => onNavigate('character')}><span>☺</span>Hero</button><button className={screen === 'backpack' ? 'active' : ''} onClick={() => onNavigate('backpack')}><span>◇</span>Backpack</button><button className={screen === 'progress' || screen === 'mastery' ? 'active' : ''} onClick={() => onNavigate('progress')}><span>↗</span>Progress</button><button className={screen === 'assessment-center' ? 'active' : ''} onClick={() => onNavigate('assessment-center')}><span>⌁</span>Assess</button><button className={screen === 'parent' || screen === 'assessment-report' ? 'active' : ''} onClick={() => onNavigate('parent')}><span>○</span>Grown-ups</button></nav><div className="player-hud"><button className="header-icon" onClick={onSound} aria-label={profile.sound ? 'Turn sound off' : 'Turn sound on'}>{profile.sound ? '♫' : '×'}</button><button className="header-icon" onClick={() => onNavigate('settings')} aria-label="Settings">⚙</button><div className="hud-stars"><span>★</span><strong>{profile.stars}</strong></div><div className="hud-grade" aria-label={profile.grade ? gradeLabel(profile.grade) : 'Grade not selected'}>{profile.grade ?? '—'}</div><div className="hud-profile"><Avatar profile={profile} small /><div><strong>{profile.nickname}</strong><span>Level {level} · {profile.explorerClass}</span></div></div></div></header>;
 }
 
 function EmptyCollection({ text }: { text: string }) { return <div className="empty-collection"><span>✦</span><p>{text}</p></div>; }

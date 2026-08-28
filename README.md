@@ -24,10 +24,15 @@ npm run dev
 
 ## Content architecture
 
-- `content/question-bank.ts` contains the typed, age-banded activity bank.
-- `content/world.ts` contains regions, quest stories, rotating Wonder Facts, and parent resources.
-- `content/rotation.ts` selects fresh quest content while remaining compatible with older local saves.
+- `content/grades.ts` defines individual Kindergarten through Grade 12 curriculum strands and presentation settings.
+- `content/question-bank.ts` contains 936 typed activities: 24 each for science, math, and English in every grade.
+- `content/world.ts` contains regions, quest stories, 325 grade-level Wonder Facts, and parent resources.
+- `content/rotation.ts` selects fresh grade-level quest content without immediate repeats.
+- `content/assessment.ts` powers untimed general, subject, and focused skill checks, adaptive selection, mastery evidence, and reports.
+- `content/profile.ts` stores the local profile and safely migrates earlier age-band saves without removing progress.
 - `content/evaluation.ts` evaluates all five activity formats.
-- `scripts/validate-content.ts` checks counts, IDs, answers, duplicates, format variety, and quest rotation.
+- `scripts/validate-content.ts` checks every grade/subject pool, IDs, answers, duplicates, format variety, assessments, mastery, migration, reports, and quest rotation.
 
 Run the content check directly with `npm run validate-content`. It also runs automatically before every production build.
+
+All progress and assessment evidence stays in browser storage on the current device. K World assessments are informal game learning checks, not diagnostic or official school assessments.

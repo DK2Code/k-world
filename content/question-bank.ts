@@ -1,8 +1,12 @@
-import type { Activity, AgeGroup, Difficulty, MatchingActivity, MultipleChoiceActivity, NumericActivity, OrderingActivity, Subject, TrueFalseActivity } from './types.ts';
+import { curriculumMap, gradeContexts, gradeLevels, gradeNumber, legacyBandForGrade } from './grades.ts';
+import { gradeExtensions } from './grade-extensions.ts';
+import type { LegacyAgeBand } from './grades.ts';
+import type { Difficulty, GradedActivity, GradeLevel, MatchingActivity, MultipleChoiceActivity, NumericActivity, OrderingActivity, Subject, TrueFalseActivity } from './types.ts';
 
-type MetaKeys = 'id' | 'age' | 'subject' | 'topic' | 'token' | 'difficulty';
+type MetaKeys = 'id' | 'grade' | 'subject' | 'topic' | 'skillId' | 'skillDescription' | 'assessmentEligible' | 'prerequisiteSkillIds' | 'token' | 'difficulty';
 type Draft = Omit<MultipleChoiceActivity, MetaKeys> | Omit<TrueFalseActivity, MetaKeys> | Omit<OrderingActivity, MetaKeys> | Omit<MatchingActivity, MetaKeys> | Omit<NumericActivity, MetaKeys>;
 type Pack = { topic: string; token: string; difficulty: Difficulty; activities: [Draft, Draft, Draft] };
+type LegacyActivity = Draft & { id: string; subject: Subject; topic: string; token: string; difficulty: Difficulty };
 
 const mc = (activity: string, prompt: string, answer: string, distractors: [string, string], hint: string, explanation: string): Draft => ({ activityType: 'multiple-choice', activity, prompt, answer, choices: [answer, ...distractors], hint, explanation });
 const tf = (activity: string, prompt: string, answer: boolean, hint: string, explanation: string): Draft => ({ activityType: 'true-false', activity, prompt, answer, hint, explanation });
@@ -326,20 +330,19 @@ const packs11to13: Record<Subject, Pack[]> = {
   ],
 };
 
-const ageCode: Record<AgeGroup, string> = { '5–7': '5-7', '8–10': '8-10', '11–13': '11-13' };
+const ageCode: Record<LegacyAgeBand, string> = { '5–7': '5-7', '8–10': '8-10', '11–13': '11-13' };
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
-const buildSubjectBank = (age: AgeGroup, subject: Subject, packs: Pack[]): Activity[] => packs.flatMap((item) => item.activities.map((draft, index) => ({
+const buildSubjectBank = (age: LegacyAgeBand, subject: Subject, packs: Pack[]): LegacyActivity[] => packs.flatMap((item) => item.activities.map((draft, index) => ({
   ...draft,
   id: `${ageCode[age]}-${subject}-${slug(item.topic)}-${index + 1}`,
-  age,
   subject,
   topic: item.topic,
   token: item.token,
   difficulty: item.difficulty,
-} as Activity)));
+} as LegacyActivity)));
 
-export const questionBank: Record<AgeGroup, Record<Subject, Activity[]>> = {
+const legacyQuestionBank: Record<LegacyAgeBand, Record<Subject, LegacyActivity[]>> = {
   '5–7': {
     science: buildSubjectBank('5–7', 'science', packs5to7.science),
     math: buildSubjectBank('5–7', 'math', packs5to7.math),
@@ -357,4 +360,33 @@ export const questionBank: Record<AgeGroup, Record<Subject, Activity[]>> = {
   },
 };
 
-export const allActivities = (Object.values(questionBank) as Record<Subject, Activity[]>[]).flatMap((bySubject) => Object.values(bySubject).flat());
+const lowerFirst = (value: string) => `${value.charAt(0).toLowerCase()}${value.slice(1)}`;
+const gradeActivity = (grade: GradeLevel, subject: Subject, activity: LegacyActivity, index: number): GradedActivity => {
+  const topicSlug = slug(activity.topic);
+  const skillId = `${grade}-${subject}-${topicSlug}`;
+  const previousTopic = index >= 3 ? legacyQuestionBank[legacyBandForGrade(grade)][subject][index - 3]?.topic : undefined;
+  return {
+    ...activity,
+    id: `grade-${grade.toLowerCase()}-${subject}-${topicSlug}-${index % 3 + 1}`,
+    grade,
+    prompt: `At ${gradeContexts[grade]}, ${lowerFirst(activity.prompt)}`,
+    skillId,
+    skillDescription: `${activity.topic}: ${curriculumMap[grade][subject][Math.floor(index / 3) % curriculumMap[grade][subject].length]}.`,
+    assessmentEligible: gradeNumber(grade) <= 8,
+    prerequisiteSkillIds: previousTopic && activity.difficulty && activity.difficulty > 1 ? [`${grade}-${subject}-${slug(previousTopic)}`] : undefined,
+  };
+};
+
+const buildGradeSubject = (grade: GradeLevel, subject: Subject): GradedActivity[] => {
+  const source = legacyQuestionBank[legacyBandForGrade(grade)][subject].map((activity, index) => gradeActivity(grade, subject, activity, index));
+  const extensions = gradeExtensions[grade]?.[subject] ?? [];
+  return extensions.length ? [...extensions, ...source.slice(0, 24 - extensions.length)] : source;
+};
+
+export const questionBank = Object.fromEntries(gradeLevels.map(({ grade }) => [grade, {
+  science: buildGradeSubject(grade, 'science'),
+  math: buildGradeSubject(grade, 'math'),
+  english: buildGradeSubject(grade, 'english'),
+}])) as Record<GradeLevel, Record<Subject, GradedActivity[]>>;
+
+export const allActivities = (Object.values(questionBank) as Record<Subject, GradedActivity[]>[]).flatMap((bySubject) => Object.values(bySubject).flat());

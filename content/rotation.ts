@@ -1,6 +1,6 @@
 import { questionBank } from './question-bank.ts';
 import { questVariants, regions } from './world.ts';
-import type { Activity, AgeGroup, QuestVariant, RegionId, Subject } from './types.ts';
+import type { GradeLevel, GradedActivity, QuestVariant, RegionId, Subject } from './types.ts';
 
 const shuffle = <T,>(items: T[], random: () => number = Math.random) => {
   const copy = [...items];
@@ -11,13 +11,13 @@ const shuffle = <T,>(items: T[], random: () => number = Math.random) => {
   return copy;
 };
 
-export const poolForRegion = (age: AgeGroup, regionId: RegionId): Activity[] => {
+export const poolForRegion = (grade: GradeLevel, regionId: RegionId): GradedActivity[] => {
   const subject = regions.find((region) => region.id === regionId)?.subject;
-  if (subject && subject !== 'mixed') return questionBank[age][subject];
-  return (['science', 'math', 'english'] as Subject[]).flatMap((item) => questionBank[age][item]);
+  if (subject && subject !== 'mixed') return questionBank[grade][subject];
+  return (['science', 'math', 'english'] as Subject[]).flatMap((item) => questionBank[grade][item]);
 };
 
-const pickDistinct = (pool: Activity[], count: number, random: () => number, existing: Activity[] = []) => {
+const pickDistinct = (pool: GradedActivity[], count: number, random: () => number, existing: GradedActivity[] = []) => {
   const chosen = [...existing];
   const unused = () => pool.filter((activity) => !chosen.some((item) => item.id === activity.id));
   for (const candidate of shuffle(unused(), random)) {
@@ -35,8 +35,8 @@ const pickDistinct = (pool: Activity[], count: number, random: () => number, exi
   return chosen.slice(0, count);
 };
 
-export function selectQuestActivities(age: AgeGroup, regionId: RegionId, savedHistory: string[] = [], random: () => number = Math.random) {
-  const fullPool = poolForRegion(age, regionId);
+export function selectQuestActivities(grade: GradeLevel, regionId: RegionId, savedHistory: string[] = [], random: () => number = Math.random) {
+  const fullPool = poolForRegion(grade, regionId);
   const validIds = new Set(fullPool.map((activity) => activity.id));
   const validHistory = savedHistory.filter((id, index) => validIds.has(id) && savedHistory.indexOf(id) === index);
   const previousIds = validHistory.slice(-3);
@@ -44,7 +44,7 @@ export function selectQuestActivities(age: AgeGroup, regionId: RegionId, savedHi
   const startingNewCycle = unvisited.length < 3;
   const eligible = startingNewCycle ? fullPool.filter((activity) => !previousIds.includes(activity.id)) : unvisited;
   const region = regions.find((item) => item.id === regionId);
-  let selected: Activity[] = [];
+  let selected: GradedActivity[] = [];
 
   if (region?.subject === 'mixed') {
     for (const subject of ['science', 'math', 'english'] as Subject[]) {

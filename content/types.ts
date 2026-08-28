@@ -1,4 +1,4 @@
-export type AgeGroup = '5–7' | '8–10' | '11–13';
+export type GradeLevel = 'K' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12';
 export type Subject = 'science' | 'math' | 'english';
 export type RegionId = 'science' | 'math' | 'english' | 'puzzle' | 'inventor';
 export type Difficulty = 1 | 2 | 3;
@@ -6,9 +6,13 @@ export type ActivityType = 'multiple-choice' | 'true-false' | 'ordering' | 'matc
 
 type ActivityBase = {
   id: string;
-  age: AgeGroup;
+  grade: GradeLevel;
   subject: Subject;
   topic: string;
+  skillId: string;
+  skillDescription: string;
+  assessmentEligible: boolean;
+  prerequisiteSkillIds?: string[];
   activityType: ActivityType;
   activity: string;
   prompt: string;
@@ -48,6 +52,7 @@ export type NumericActivity = ActivityBase & {
 };
 
 export type Activity = MultipleChoiceActivity | TrueFalseActivity | OrderingActivity | MatchingActivity | NumericActivity;
+export type GradedActivity = Activity;
 
 export type QuestVariant = {
   id: string;
@@ -60,7 +65,7 @@ export type QuestVariant = {
 
 export type WonderFact = {
   id: string;
-  age: AgeGroup;
+  grade: GradeLevel;
   region: RegionId;
   text: string;
 };

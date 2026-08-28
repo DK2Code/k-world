@@ -1,10 +1,8 @@
-import type { AgeGroup, QuestVariant, Region, RegionId, WonderFact } from './types.ts';
+import { gradeContexts, gradeLevels, gradeNumber } from './grades.ts';
+import { questionBank } from './question-bank.ts';
+import type { GradeLevel, QuestVariant, Region, RegionId, WonderFact } from './types.ts';
 
-export const ageGroups: { range: AgeGroup; label: string; note: string; color: string }[] = [
-  { range: '5–7', label: 'Little Explorer', note: 'Big pictures & gentle puzzles', color: 'coral' },
-  { range: '8–10', label: 'Brave Adventurer', note: 'Stories, riddles & discoveries', color: 'gold' },
-  { range: '11–13', label: 'Master Pathfinder', note: 'Deeper quests & challenges', color: 'violet' },
-];
+export { gradeLevels } from './grades.ts';
 
 export const regions: Region[] = [
   { id: 'science', name: 'Science Jungle', short: 'Science', icon: '✿', color: '#2ea875', subject: 'science', level: 1, guide: 'Professor Pip', guideIcon: '●', description: 'A living laboratory where every leaf hides a discovery.', position: { x: 17, y: 25 } },
@@ -59,35 +57,24 @@ export const questVariants: Record<RegionId, QuestVariant[]> = {
   ],
 };
 
-const factTexts: Record<AgeGroup, Record<RegionId, string[]>> = {
-  '5–7': {
-    science: ['A butterfly tastes with its feet!', 'Some frogs can breathe through their skin.', 'Sunflowers turn toward bright light as they grow.', 'Water can be a liquid, solid ice, or invisible water vapour.', 'Your heart is a strong muscle that pumps blood around your body.'],
-    math: ['A triangle always has three sides and three corners.', 'Zero is a number that means none.', 'An even number can be shared into two equal groups.', 'A cube has six square faces.', 'Two halves fit together to make one whole.'],
-    english: ['Every sentence begins with a capital letter.', 'Rhyming words end with the same sound.', 'A verb can tell what someone or something does.', 'A question mark shows that a sentence asks something.', 'Adding s often makes a word mean more than one.'],
-    puzzle: ['Your brain grows stronger when you try a new kind of puzzle.', 'Looking for a pattern can make a hard puzzle easier.', 'Crossing out answers that cannot work is a useful clue strategy.', 'You can solve a big problem one small step at a time.', 'Explaining your idea can help you check it.'],
-    inventor: ['Inventors test ideas, learn what happened, and try again.', 'A model is a small or simple version of an idea.', 'Measuring helps parts fit together.', 'A strong bridge spreads weight across its parts.', 'Inventors use pictures and words to share how a design works.'],
-  },
-  '8–10': {
-    science: ['A teaspoon of healthy soil can contain billions of microorganisms.', 'Sound travels as vibrations through matter.', 'Saturn’s rings are made mostly of ice particles and rock.', 'Plants release oxygen while making sugar through photosynthesis.', 'The water cycle moves water through evaporation, condensation, and precipitation.'],
-    math: ['A fraction describes equal parts of one whole.', 'The perimeter is the distance all the way around a shape.', 'A right angle measures 90 degrees.', 'Equivalent fractions name the same amount in different ways.', 'Probability compares favourable outcomes with all possible outcomes.'],
-    english: ['A synonym is a word with the same or a very similar meaning.', 'A prefix is added to the beginning of a word to change its meaning.', 'Readers make inferences by combining text clues with what they know.', 'The main idea is the most important point a text communicates.', 'A narrator’s point of view affects which details a reader receives.'],
-    puzzle: ['Breaking a hard problem into smaller parts is a powerful strategy.', 'A table can organize clues so patterns are easier to see.', 'Checking an answer in a different way can reveal mistakes.', 'A useful clue must fit every rule in the puzzle.', 'Mixed puzzles train your brain to switch strategies.'],
-    inventor: ['A prototype is an early model used to test an idea.', 'A fair test changes one variable while keeping others the same.', 'Engineers record measurements so tests can be compared.', 'Clear labels help another person build from a blueprint.', 'A design constraint is a limit that an invention must work within.'],
-  },
-  '11–13': {
-    science: ['Plants transform light energy into chemical energy during photosynthesis.', 'DNA carries hereditary information in living organisms.', 'Electric current is the movement of electric charge.', 'Greenhouse gases absorb and re-emit infrared energy in the atmosphere.', 'A controlled experiment compares results while changing one independent variable.'],
-    math: ['A percentage is a ratio measured out of one hundred.', 'The slope of a line describes its rate of change.', 'The mean can be affected strongly by an extreme value.', 'A prism’s volume equals the area of its base multiplied by its height.', 'Equivalent ratios describe the same proportional relationship.'],
-    english: ['A metaphor compares unlike things without using “like” or “as.”', 'An independent clause can stand alone as a complete sentence.', 'Authors choose text structures to organize ideas for a purpose.', 'Strong textual evidence directly supports an inference or claim.', 'Revision improves meaning and flow; editing corrects conventions.'],
-    puzzle: ['Logic puzzles use rules and deduction to eliminate impossible answers.', 'A counterexample can prove that a general claim is false.', 'Useful evidence is relevant, accurate, and sufficient for the conclusion.', 'Representing a problem with a diagram can reveal hidden relationships.', 'Flexible thinkers change strategies when new evidence appears.'],
-    inventor: ['Engineers improve designs by testing, measuring, and iterating.', 'Trade-offs occur when improving one feature makes another harder to achieve.', 'A design review uses evidence to decide what should change next.', 'Precision describes how closely repeated measurements agree.', 'Technical communication should be clear enough for someone else to reproduce a result.'],
-  },
+const mixedFacts = (grade: GradeLevel, region: 'puzzle' | 'inventor') => {
+  const advanced = gradeNumber(grade) >= 9;
+  if (region === 'puzzle') return advanced
+    ? ['A counterexample can disprove a general claim.', 'Organizing evidence in a table can reveal relationships.', 'A strong conclusion must fit every relevant clue.', 'Uncertainty should be reported when evidence is incomplete.', 'Changing strategies is useful when new evidence contradicts a model.']
+    : ['Breaking a hard problem into smaller parts is a powerful strategy.', 'A table can organize clues so patterns are easier to see.', 'Checking an answer in a different way can reveal mistakes.', 'A useful clue must fit every rule in the puzzle.', 'Explaining your idea can help you check it.'];
+  return advanced
+    ? ['Engineers evaluate trade-offs among performance, cost, safety, and environmental impact.', 'Replication helps show whether a test result is reliable.', 'A model is useful when its assumptions and limits are understood.', 'Design reviews connect measurements to specific improvements.', 'Technical communication should let another person reproduce a process.']
+    : ['Inventors test ideas, learn what happened, and try again.', 'A prototype is an early model used to test an idea.', 'Measuring helps parts fit together.', 'A fair test changes one variable while keeping others controlled.', 'Clear labels help another person build from a blueprint.'];
 };
 
-export const wonderFacts: WonderFact[] = (Object.entries(factTexts) as [AgeGroup, Record<RegionId, string[]>][]).flatMap(([age, byRegion]) =>
-  (Object.entries(byRegion) as [RegionId, string[]][]).flatMap(([region, texts]) => texts.map((text, index) => ({ id: `${age.replace('–', '-')}-${region}-fact-${index + 1}`, age, region, text }))),
-);
+export const wonderFacts: WonderFact[] = gradeLevels.flatMap(({ grade }) => regions.flatMap((region) => {
+  const texts = region.subject === 'mixed'
+    ? mixedFacts(grade, region.id as 'puzzle' | 'inventor')
+    : questionBank[grade][region.subject].slice(0, 5).map((activity) => activity.explanation);
+  return texts.map((text, index) => ({ id: `grade-${grade}-${region.id}-fact-${index + 1}`, grade, region: region.id, text: `${gradeContexts[grade]} discovery: ${text}` }));
+}));
 
-export const factsFor = (age: AgeGroup, region: RegionId) => wonderFacts.filter((fact) => fact.age === age && fact.region === region);
+export const factsFor = (grade: GradeLevel, region: RegionId) => wonderFacts.filter((fact) => fact.grade === grade && fact.region === region);
 
 export const learningResources = [
   { name: 'Khan Academy Kids', url: 'https://learn.khanacademy.org/khan-academy-kids/' },
