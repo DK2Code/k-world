@@ -12,7 +12,16 @@ export type NarratorVoice = {
 export type RankedNarratorVoice<T extends NarratorVoice = NarratorVoice> = T & {
   score: number;
   recommended: boolean;
+  quality: 'enhanced' | 'standard';
 };
+
+export type NarratorStyle = 'adventure' | 'storyteller' | 'coach';
+
+export const narratorStyles: { id: NarratorStyle; name: string; description: string }[] = [
+  { id: 'adventure', name: 'Warm Adventure Guide', description: 'Friendly energy with lively, natural pauses.' },
+  { id: 'storyteller', name: 'Calm Storyteller', description: 'Gentle pacing with longer pauses between ideas.' },
+  { id: 'coach', name: 'Clear Learning Coach', description: 'Crisp instructions and extra clarity for questions.' },
+];
 
 const qualityPattern = /natural|neural|enhanced|premium|high quality|studio/i;
 const trustedPattern = /aria|ava|jenny|guy|sonia|ryan|samantha|zira|alex|daniel|karen|moira|tessa|google (us|uk|australia|canada)|microsoft .* online/i;
@@ -34,7 +43,7 @@ export function rankNarratorVoices<T extends NarratorVoice>(voices: T[]): Ranked
   const unique = [...new Map(voices.map((voice) => [voice.voiceURI || `${voice.name}-${voice.lang}`, voice])).values()];
   const english = unique.filter((voice) => /^en(?:[-_]|$)/i.test(voice.lang));
   return english
-    .map((voice) => ({ ...voice, score: voiceQualityScore(voice), recommended: false }))
+    .map((voice) => ({ ...voice, score: voiceQualityScore(voice), recommended: false, quality: qualityPattern.test(voice.name) ? 'enhanced' as const : 'standard' as const }))
     .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
     .map((voice, index) => ({ ...voice, recommended: index === 0 }));
 }
@@ -95,17 +104,44 @@ export function splitNarration(value: string, maxLength = 170) {
       if (!segment || `${segment} ${clause}`.length <= maxLength) segment = `${segment} ${clause}`.trim();
       else { segments.push(segment); segment = clause; }
     }
-    if (segment) segments.push(segment);
+    if (segment) {
+      if (segment.length <= maxLength) segments.push(segment);
+      else {
+        const words = segment.split(/\s+/);
+        let phrase = '';
+        for (const word of words) {
+          if (!phrase || `${phrase} ${word}`.length <= maxLength) phrase = `${phrase} ${word}`.trim();
+          else { segments.push(phrase); phrase = word; }
+        }
+        if (phrase) segments.push(phrase);
+      }
+    }
   }
   return segments;
 }
 
-export function narrationDelivery(grade: GradeLevel | null, chosenRate: number, chosenPitch: number) {
+export function narrationDelivery(grade: GradeLevel | null, chosenRate: number, chosenPitch: number, narratorStyle: NarratorStyle = 'adventure', segmentIndex = 0, segment = '') {
   const gradeValue = grade ? gradeNumber(grade) : 5;
   const safeRate = Math.min(1.2, Math.max(0.65, chosenRate));
   const safePitch = Math.min(1.1, Math.max(0.9, chosenPitch));
-  if (gradeValue <= 2) return { rate: Math.max(0.62, safeRate * 0.9), pitch: Math.min(1.06, safePitch + 0.02), pauseMs: 230, style: 'Gentle early-reader pace' };
-  if (gradeValue <= 5) return { rate: safeRate * 0.98, pitch: safePitch, pauseMs: 150, style: 'Friendly conversational pace' };
-  if (gradeValue <= 8) return { rate: Math.min(1.2, safeRate * 1.02), pitch: Math.min(1.04, safePitch), pauseMs: 110, style: 'Natural, confident pace' };
-  return { rate: Math.min(1.2, safeRate * 1.04), pitch: Math.min(1.01, safePitch), pauseMs: 90, style: 'Calm, mature pace' };
+  const styleSettings = narratorStyle === 'storyteller'
+    ? { rate: .94, pitch: -.015, pause: 1.35 }
+    : narratorStyle === 'coach'
+      ? { rate: 1.01, pitch: -.025, pause: .9 }
+      : { rate: .98, pitch: 0, pause: 1.08 };
+  const cadence = [1, .965, 1.018, .985][segmentIndex % 4];
+  const emphasis = /\?|choose|remember|important|clue|carefully/i.test(segment) ? .95 : segment.length < 38 ? .98 : 1;
+  const gradeSettings = gradeValue <= 2
+    ? { rate: .9, pitch: .01, pause: 230, label: 'Gentle early-reader pace' }
+    : gradeValue <= 5
+      ? { rate: .98, pitch: 0, pause: 150, label: 'Friendly conversational pace' }
+      : gradeValue <= 8
+        ? { rate: 1.02, pitch: -.01, pause: 110, label: 'Natural, confident pace' }
+        : { rate: 1.04, pitch: -.025, pause: 90, label: 'Calm, mature pace' };
+  return {
+    rate: Math.min(1.2, Math.max(.62, safeRate * styleSettings.rate * gradeSettings.rate * cadence * emphasis)),
+    pitch: Math.min(gradeValue >= 9 ? 1 : 1.05, Math.max(.86, safePitch + styleSettings.pitch + gradeSettings.pitch)),
+    pauseMs: Math.round(gradeSettings.pause * styleSettings.pause),
+    style: `${narratorStyles.find((item) => item.id === narratorStyle)?.name ?? 'Warm Adventure Guide'} · ${gradeSettings.label}`,
+  };
 }

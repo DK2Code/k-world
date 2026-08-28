@@ -5,20 +5,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { availableSkills, buildAssessmentReport, createAssessmentSession, getActivity, masteryBySkill, practiceAttempt, submitAssessmentAnswer } from '@/content/assessment.ts';
 import { isActivityCorrect } from '@/content/evaluation.ts';
 import { curriculumMap, gradeLabel, gradeLevels, gradeNumber, gradePresentation } from '@/content/grades.ts';
-import { narrationDelivery, rankNarratorVoices, resolveNarratorVoice, splitNarration } from '@/content/narration.ts';
+import { narrationDelivery, narratorStyles, rankNarratorVoices, resolveNarratorVoice, splitNarration } from '@/content/narration.ts';
 import { defaultProfile, migrateProfile } from '@/content/profile.ts';
 import { selectQuestActivities, selectQuestVariant } from '@/content/rotation.ts';
 import { factsFor, learningResources, questVariants, regions } from '@/content/world.ts';
 import type { AssessmentKind, AssessmentReport } from '@/content/assessment.ts';
-import type { RankedNarratorVoice } from '@/content/narration.ts';
-import type { ProfileData } from '@/content/profile.ts';
+import type { NarratorStyle, RankedNarratorVoice } from '@/content/narration.ts';
+import type { ProfileData, ReadDockPlacement, SubjectProgress } from '@/content/profile.ts';
 import type { Activity, GradeLevel, GradedActivity, QuestVariant, RegionId, Subject, WonderFact } from '@/content/types.ts';
 
-type Screen = 'welcome' | 'character' | 'intro' | 'map' | 'region' | 'game' | 'rewards' | 'backpack' | 'progress' | 'settings' | 'parent' | 'assessment-center' | 'assessment-intro' | 'assessment' | 'assessment-paused' | 'assessment-result' | 'assessment-report' | 'mastery';
+type Screen = 'welcome' | 'grade-select' | 'character' | 'intro' | 'map' | 'region' | 'game' | 'rewards' | 'backpack' | 'progress' | 'settings' | 'parent' | 'assessment-center' | 'assessment-intro' | 'assessment' | 'assessment-paused' | 'assessment-result' | 'assessment-report' | 'mastery';
 type Profile = ProfileData;
 
 const STORE_KEY = 'kworld-adventure-v1';
 const NARRATOR_PREVIEW = 'Welcome, explorer! Your next K World adventure is waiting. Let’s discover something amazing together.';
+const EMPTY_SUBJECT_PROGRESS: SubjectProgress = { science: { correct: 0, attempts: 0 }, math: { correct: 0, attempts: 0 }, english: { correct: 0, attempts: 0 } };
 
 const nicknames = ['Nova', 'Sunny Star', 'Clever Fox', 'Mighty Maple'];
 const classes = [
@@ -63,10 +64,10 @@ function shuffled<T>(items: T[]) {
 
 function activityNarration(activity?: Activity) {
   if (!activity) return '';
-  if (activity.activityType === 'multiple-choice') return `${activity.prompt} Choose from ${activity.choices.join(', ')}.`;
+  if (activity.activityType === 'multiple-choice') return `${activity.prompt} Take a moment, then choose. ${activity.choices.map((choice, index) => `Choice ${String.fromCharCode(65 + index)}. ${choice}.`).join(' ')}`;
   if (activity.activityType === 'true-false') return `${activity.prompt} Choose true or false.`;
-  if (activity.activityType === 'ordering') return `${activity.prompt} Put these items in order using the move up and move down buttons: ${activity.items.join(', ')}.`;
-  if (activity.activityType === 'matching') return `${activity.prompt} Match each item on the left with one choice on the right. Left items: ${activity.pairs.map((pair) => pair.left).join(', ')}. Choices: ${activity.pairs.map((pair) => pair.right).join(', ')}.`;
+  if (activity.activityType === 'ordering') return `${activity.prompt} Put these items in order using the move up and move down buttons. ${activity.items.map((item, index) => `Item ${index + 1}. ${item}.`).join(' ')}`;
+  if (activity.activityType === 'matching') return `${activity.prompt} Match each item on the left with one choice on the right. Left items. ${activity.pairs.map((pair) => pair.left).join('. ')}. Choices. ${activity.pairs.map((pair) => pair.right).join('. ')}.`;
   return `${activity.prompt} Enter a number${activity.suffix ? ` in ${activity.suffix.trim()}` : ''}.`;
 }
 
@@ -88,6 +89,8 @@ export default function Home() {
   const [screen, setScreen] = useState<Screen>('welcome');
   const [hydrated, setHydrated] = useState(false);
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | null>(null);
+  const [gradeReturnScreen, setGradeReturnScreen] = useState<Screen>('map');
+  const [pendingGrade, setPendingGrade] = useState<GradeLevel | null>(null);
   const [activeRegionId, setActiveRegionId] = useState<RegionId>('science');
   const [activeQuest, setActiveQuest] = useState<QuestVariant>(questVariants.science[0]);
   const [questQuestions, setQuestQuestions] = useState<GradedActivity[]>([]);
@@ -121,7 +124,9 @@ export default function Home() {
   const [activeReport, setActiveReport] = useState<AssessmentReport | null>(null);
   const [narratorVoices, setNarratorVoices] = useState<RankedNarratorVoice[]>([]);
   const [voiceStatus, setVoiceStatus] = useState<'loading' | 'ready' | 'fallback' | 'unavailable'>('loading');
+  const [realmNotice, setRealmNotice] = useState('');
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const regionTransitionRef = useRef(false);
   const nativeVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const speechRunRef = useRef(0);
   const speechPauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,7 +190,8 @@ export default function Home() {
   const assessmentSkills = useMemo(() => profile.grade ? availableSkills(profile.grade, selectedAssessmentSubject) : [], [profile.grade, selectedAssessmentSubject]);
   const assessmentSkillId = assessmentSkills.some((skill) => skill.id === selectedAssessmentSkill) ? selectedAssessmentSkill : assessmentSkills[0]?.id ?? '';
   const selectedNarratorVoice = useMemo(() => resolveNarratorVoice(narratorVoices, profile.narratorVoiceURI), [narratorVoices, profile.narratorVoiceURI]);
-  const narratorStyle = narrationDelivery(profile.grade, profile.speechRate, profile.speechPitch);
+  const narratorStyle = narrationDelivery(profile.grade, profile.speechRate, profile.speechPitch, profile.narratorStyle);
+  const currentGradeProgress = profile.grade ? profile.gradeProgress[profile.grade] ?? EMPTY_SUBJECT_PROGRESS : EMPTY_SUBJECT_PROGRESS;
   const nearbyRegion = useMemo(() => regions.find((region) => {
     const dx = region.position.x - profile.worldPosition.x;
     const dy = region.position.y - profile.worldPosition.y;
@@ -217,12 +223,11 @@ export default function Home() {
 
   const speak = useCallback((text: string, force = false) => {
     if ((!profile.narration && !force) || typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
-    const segments = splitNarration(text);
+    const segments = splitNarration(text, profile.narratorStyle === 'coach' ? 120 : 138);
     if (!segments.length) return;
     stopSpeech();
     const runId = speechRunRef.current;
     const preparedText = segments.join(' ');
-    const delivery = narrationDelivery(profile.grade, profile.speechRate, profile.speechPitch);
     const selectedVoiceURI = selectedNarratorVoice?.voiceURI ?? '';
     const fallbackVoiceURI = narratorVoices[0]?.voiceURI ?? '';
     let fallbackTried = false;
@@ -238,6 +243,7 @@ export default function Home() {
       const utterance = new SpeechSynthesisUtterance(segment);
       if (nativeVoice) { utterance.voice = nativeVoice; utterance.lang = nativeVoice.lang; }
       else utterance.lang = 'en-US';
+      const delivery = narrationDelivery(profile.grade, profile.speechRate, profile.speechPitch, profile.narratorStyle, segmentIndex, segment);
       utterance.rate = delivery.rate;
       utterance.pitch = delivery.pitch;
       const previousWordCount = segments.slice(0, segmentIndex).join(' ').split(/\s+/).filter(Boolean).length;
@@ -264,7 +270,7 @@ export default function Home() {
       window.speechSynthesis.speak(utterance);
     };
     playSegment(0);
-  }, [narratorVoices, profile.grade, profile.narration, profile.speechPitch, profile.speechRate, selectedNarratorVoice, stopSpeech]);
+  }, [narratorVoices, profile.grade, profile.narration, profile.narratorStyle, profile.speechPitch, profile.speechRate, selectedNarratorVoice, stopSpeech]);
 
   useEffect(() => { speakRef.current = speak; }, [speak]);
 
@@ -287,9 +293,10 @@ export default function Home() {
 
   const screenNarration = useMemo(() => {
     if (screen === 'welcome') return 'Welcome to K World! Choose Kindergarten or a grade from one through twelve so every adventure matches what you are learning.';
+    if (screen === 'grade-select') return 'Change adventure grade. Your hero, stars, items, settings, and earlier learning history will stay safe. New quests will match the grade you choose.';
     if (screen === 'character') return 'Create your hero. Choose a skin tone, hair, outfit, explorer class, adventure nickname, and animal companion.';
     if (screen === 'intro') return `Explorer ${profile.nickname}! The Compass of Curiosity is glowing. Five realms need your questions, ideas, and courage.`;
-    if (screen === 'map') return `World Explorer. Move ${profile.nickname} with the arrow keys, W A S D, or the big direction buttons. Walk close to a realm, then choose enter realm. ${regions.map((region) => `${region.name}, level ${region.level}.`).join(' ')}`;
+    if (screen === 'map') return `World Explorer. Move ${profile.nickname} with the arrow keys, W A S D, or the big direction buttons. Select any unlocked realm to enter it right away. ${regions.map((region) => `${region.name}, level ${region.level}.`).join(' ')}`;
     if (screen === 'region') return `Welcome to ${activeRegion.name}. Your new quest is ${activeQuest.title}. ${activeQuest.intro}`;
     if (screen === 'game' && currentQuestion) return activityNarration(currentQuestion);
     if (screen === 'rewards') return `Quest complete! Your curiosity lit the way. You earned ${reward.stars} stars and ${reward.xp} explorer points.`;
@@ -323,6 +330,43 @@ export default function Home() {
     const presentation = gradePresentation(selectedGrade);
     updateProfile({ grade: selectedGrade, narration: presentation.narrationDefault, narrationAuto: presentation.narrationDefault });
     setScreen('character');
+  };
+
+  const openGradeSelector = (returnScreen: Screen = screen) => {
+    stopSpeech();
+    setSelectedGrade(profile.grade);
+    setPendingGrade(null);
+    setGradeReturnScreen(returnScreen === 'grade-select' ? 'map' : returnScreen);
+    setScreen('grade-select');
+  };
+
+  const applyGradeSwitch = (grade: GradeLevel) => {
+    stopSpeech();
+    setProfile((current) => {
+      const pausedAssessments = { ...current.pausedAssessments };
+      if (current.grade && current.activeAssessment && !current.activeAssessment.completedAt) pausedAssessments[current.grade] = current.activeAssessment;
+      const restoredAssessment = pausedAssessments[grade] ?? null;
+      delete pausedAssessments[grade];
+      return { ...current, grade, activeAssessment: restoredAssessment, pausedAssessments };
+    });
+    setSelectedGrade(grade);
+    setPendingGrade(null);
+    setActiveReport(null);
+    setQuestQuestions([]);
+    setQuestionIndex(0);
+    setSelectedAnswer(null);
+    setCorrectAnswer(false);
+    setShowHint(false);
+    setRealmNotice(`${gradeLabel(grade)} adventures are ready.`);
+    setScreen('map');
+  };
+
+  const requestGradeSwitch = (grade: GradeLevel) => {
+    if (grade === profile.grade) { setScreen('map'); return; }
+    const unfinishedAssessment = Boolean(profile.activeAssessment && !profile.activeAssessment.completedAt);
+    const unfinishedQuest = ['region', 'game'].includes(gradeReturnScreen) && questQuestions.length > 0 && questionIndex < questQuestions.length;
+    if (unfinishedAssessment || unfinishedQuest) setPendingGrade(grade);
+    else applyGradeSwitch(grade);
   };
 
   const useCustomNickname = () => {
@@ -375,19 +419,28 @@ export default function Home() {
     playTone();
   }, [playTone, profile.reducedMotion]);
 
-  const travelToRegion = (id: string) => {
+  const selectRegion = useCallback((id: RegionId) => {
     const destination = regions.find((region) => region.id === id);
-    if (!destination) return;
+    if (!destination || regionTransitionRef.current) return;
+    if (destination.level > level) {
+      setRealmNotice(`${destination.name} is still locked. Reach explorer level ${destination.level} to enter.`);
+      playTone(false);
+      return;
+    }
+    regionTransitionRef.current = true;
+    setRealmNotice(`Entering ${destination.name}.`);
     setProfile((current) => ({ ...current, worldPosition: { ...destination.position } }));
     playTone();
-  };
+    enterRegion(id);
+    setTimeout(() => { regionTransitionRef.current = false; }, 650);
+  }, [enterRegion, level, playTone]);
 
   useEffect(() => {
     if (screen !== 'map') return;
     const step = profile.grade && gradeNumber(profile.grade) <= 2 ? 6 : 4;
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.matches('input, select, textarea')) return;
+      if (target?.matches('input, select, textarea, button, a, [role="button"]')) return;
       const key = event.key.toLowerCase();
       const moves: Record<string, [number, number]> = {
         arrowleft: [-step, 0], a: [-step, 0], arrowright: [step, 0], d: [step, 0],
@@ -395,11 +448,11 @@ export default function Home() {
       };
       if (moves[key]) { event.preventDefault(); moveHero(...moves[key]); }
       if (key === ' ') { event.preventDefault(); jumpHero(); }
-      if (key === 'enter' && nearbyRegion && level >= nearbyRegion.level) { event.preventDefault(); enterRegion(nearbyRegion.id); }
+      if (key === 'enter' && nearbyRegion) { event.preventDefault(); selectRegion(nearbyRegion.id); }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [enterRegion, jumpHero, level, moveHero, nearbyRegion, profile.grade, screen]);
+  }, [jumpHero, moveHero, nearbyRegion, profile.grade, screen, selectRegion]);
 
   const discoverFact = () => {
     const grade = profile.grade ?? '3';
@@ -463,7 +516,15 @@ export default function Home() {
     const learningAttempt = practiceAttempt(currentQuestion, isCorrect, showHint);
     setProfile((current) => {
       const subjectProgress = current.progress[subject];
-      return { ...current, practiceAttempts: [...current.practiceAttempts, learningAttempt], progress: { ...current.progress, [subject]: { attempts: subjectProgress.attempts + 1, correct: subjectProgress.correct + (isCorrect ? 1 : 0) } } };
+      const grade = currentQuestion.grade;
+      const gradeProgress = current.gradeProgress[grade] ?? EMPTY_SUBJECT_PROGRESS;
+      const gradeSubjectProgress = gradeProgress[subject];
+      return {
+        ...current,
+        practiceAttempts: [...current.practiceAttempts, learningAttempt],
+        progress: { ...current.progress, [subject]: { attempts: subjectProgress.attempts + 1, correct: subjectProgress.correct + (isCorrect ? 1 : 0) } },
+        gradeProgress: { ...current.gradeProgress, [grade]: { ...gradeProgress, [subject]: { attempts: gradeSubjectProgress.attempts + 1, correct: gradeSubjectProgress.correct + (isCorrect ? 1 : 0) } } },
+      };
     });
     if (isCorrect) { setCorrectAnswer(true); setScore((value) => value + 1); playTone(); speak(`Correct! ${currentQuestion.explanation}`); }
     else { playTone(false); speak(`Good thinking. Try once more. ${currentQuestion.hint}`); }
@@ -656,11 +717,21 @@ export default function Home() {
         </section>
       )}
 
-      {['map', 'region', 'backpack', 'progress', 'settings', 'parent', 'assessment-center', 'mastery', 'assessment-report'].includes(screen) && <GameHeader profile={profile} level={level} screen={screen} onNavigate={setScreen} onSound={() => updateProfile({ sound: !profile.sound })} />}
+      {['grade-select', 'map', 'region', 'backpack', 'progress', 'settings', 'parent', 'assessment-center', 'mastery', 'assessment-report'].includes(screen) && <GameHeader profile={profile} level={level} screen={screen} onNavigate={setScreen} onSound={() => updateProfile({ sound: !profile.sound })} onGrade={() => openGradeSelector(screen)} />}
+
+      {screen === 'grade-select' && (
+        <section className="content-screen grade-change-screen">
+          <div className="content-heading"><div><span className="eyebrow"><span>✦</span> Choose any time</span><h2>Change adventure grade</h2><p>New questions, quests, vocabulary, assessments, and narrator pacing will match your selection.</p></div><button className="secondary-action" onClick={() => { setPendingGrade(null); setSelectedGrade(profile.grade); setScreen(gradeReturnScreen); }}>← Cancel</button></div>
+          <article className="grade-preservation-note"><span aria-hidden="true">♡</span><div><strong>Your adventure stays safe</strong><p>Your hero, XP, stars, badges, collected items, settings, and learning history from every grade are preserved.</p></div></article>
+          <div className="grade-grid grade-change-grid" role="radiogroup" aria-label="Choose a new school grade">{gradeLevels.map((option) => <button key={option.grade} type="button" role="radio" aria-checked={selectedGrade === option.grade} className={`grade-card ${selectedGrade === option.grade ? 'selected' : ''}`} onClick={() => setSelectedGrade(option.grade)}><span className="grade-number">{option.grade}</span><span><strong>{option.label}</strong><small>{option.stage}</small></span><span className="card-check" aria-hidden="true">✓</span></button>)}</div>
+          <div className="grade-change-actions"><button className="secondary-action" onClick={() => { setPendingGrade(null); setSelectedGrade(profile.grade); setScreen(gradeReturnScreen); }}>Keep {profile.grade ? gradeLabel(profile.grade) : 'current grade'}</button><button className="primary-action" disabled={!selectedGrade} onClick={() => selectedGrade && requestGradeSwitch(selectedGrade)}>{selectedGrade === profile.grade ? 'Return to world' : `Switch to ${selectedGrade ? gradeLabel(selectedGrade) : 'selected grade'}`} <span>→</span></button></div>
+          {pendingGrade && <div className="grade-confirm-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="grade-confirm-title" className="grade-confirm-dialog"><span aria-hidden="true">⌁</span><h3 id="grade-confirm-title">Pause this adventure and switch?</h3><p>{profile.activeAssessment ? 'Your unfinished Skill Check will stay paused under the current grade.' : 'The current unfinished quest will close.'} Your completed progress will remain safe.</p><div><button className="secondary-action" onClick={() => setPendingGrade(null)}>Keep playing here</button><button className="primary-action" onClick={() => applyGradeSwitch(pendingGrade)}>Pause and switch to {gradeLabel(pendingGrade)}</button></div></section></div>}
+        </section>
+      )}
 
       {screen === 'map' && (
         <section className="map-screen">
-          <div className="map-heading"><div><span className="eyebrow"><span>✦</span> {profile.grade ? gradeLabel(profile.grade) : 'World'} explorer</span><h2>Adventure is this way, {profile.nickname}!</h2><p>Walk to a realm, or visit the Compass Assessment for a short learning check.</p></div><div className="map-heading-actions"><button className="assessment-map-button" onClick={() => setScreen('assessment-center')}><span>⌁</span><strong>Explorer Skill Check</strong><small>Untimed · saved locally</small></button><div className="daily-card"><span>✦</span><div><small>Explorer streak</small><strong>{Math.max(1, new Set(profile.completed).size)} bright day{new Set(profile.completed).size === 1 ? '' : 's'}</strong></div></div></div></div>
+          <div className="map-heading"><div><span className="eyebrow"><span>✦</span> {profile.grade ? gradeLabel(profile.grade) : 'World'} explorer</span><h2>Adventure is this way, {profile.nickname}!</h2><p>Select any unlocked realm to enter it right away, or visit the Compass Assessment.</p></div><div className="map-heading-actions"><button className="assessment-map-button" onClick={() => setScreen('assessment-center')}><span>⌁</span><strong>Explorer Skill Check</strong><small>Untimed · saved locally</small></button><div className="daily-card"><span>✦</span><div><small>Explorer streak</small><strong>{Math.max(1, new Set(profile.completed).size)} bright day{new Set(profile.completed).size === 1 ? '' : 's'}</strong></div></div></div></div>
           <div className="world-map" tabIndex={0} aria-label="Playable K World map. Move with arrow keys or W A S D.">
             <div className="map-water-lines" /><div className="map-cloud mc-one" /><div className="map-cloud mc-two" />
             <div className="trail trail-one" /><div className="trail trail-two" /><div className="trail trail-three" /><div className="trail trail-four" />
@@ -669,18 +740,18 @@ export default function Home() {
               const locked = level < region.level;
               const done = profile.completed.includes(region.id);
               const isNear = nearbyRegion?.id === region.id;
-              return <button key={region.id} style={{ left: `${region.position.x}%`, top: `${region.position.y}%`, '--region': region.color } as React.CSSProperties} className={`region-node region-${region.id} ${locked ? 'locked' : ''} ${done ? 'done' : ''} ${isNear ? 'near' : ''}`} onClick={() => travelToRegion(region.id)} aria-label={`Travel to ${region.name}${locked ? `, unlocks at level ${region.level}` : ''}`}>
+              return <button key={region.id} style={{ left: `${region.position.x}%`, top: `${region.position.y}%`, '--region': region.color } as React.CSSProperties} className={`region-node region-${region.id} ${locked ? 'locked' : ''} ${done ? 'done' : ''} ${isNear ? 'near' : ''}`} onClick={() => selectRegion(region.id)} aria-label={`${locked ? 'Locked realm' : 'Enter'} ${region.name}${locked ? `, select for unlock details, reach level ${region.level}` : ''}`}>
                 <span className="region-art"><i>{locked ? '•' : region.icon}</i><b /></span><span className="region-label"><small>{locked ? `Level ${region.level} needed` : done ? 'Quest replay' : region.short}</small><strong>{region.name}</strong></span>{done && <span className="done-star">★</span>}
               </button>;
             })}
             <div className={`map-avatar facing-${heroFacing} ${heroJumping ? 'jumping' : ''}`} style={{ left: `${profile.worldPosition.x}%`, top: `${profile.worldPosition.y}%` }}><Avatar profile={profile} small /><span>{heroJumping ? 'Boing!' : 'You are here'}</span></div>
             {nearbyRegion && <div className={`realm-gate ${level < nearbyRegion.level ? 'gate-locked' : ''}`}>
-              <span>{level < nearbyRegion.level ? '◆' : '✦'}</span><div><small>{level < nearbyRegion.level ? 'Path locked' : 'You found a realm!'}</small><strong>{nearbyRegion.name}</strong></div>{level >= nearbyRegion.level ? <button onClick={() => enterRegion(nearbyRegion.id)}>Enter realm →</button> : <em>Reach level {nearbyRegion.level}</em>}
+              <span>{level < nearbyRegion.level ? '◆' : '✦'}</span><div><small>{level < nearbyRegion.level ? 'Path locked' : 'Realm nearby'}</small><strong>{nearbyRegion.name}</strong></div>{level >= nearbyRegion.level ? <em>Press Enter or select its marker</em> : <em>Reach level {nearbyRegion.level}</em>}
             </div>}
             <div className="compass" aria-hidden="true"><b>N</b><i /></div>
           </div>
           <div className="map-controls" aria-label="World movement controls"><div className="control-help"><strong>Move your hero</strong><span>Arrow keys / W A S D · Space to jump · Enter a nearby realm</span></div><div className="d-pad"><button aria-label="Move up" onClick={() => moveHero(0, profile.grade && gradeNumber(profile.grade) <= 2 ? -6 : -4)}>▲</button><button aria-label="Move left" onClick={() => moveHero(profile.grade && gradeNumber(profile.grade) <= 2 ? -6 : -4, 0)}>◀</button><button className="jump-control" aria-label="Jump" onClick={jumpHero}>JUMP</button><button aria-label="Move right" onClick={() => moveHero(profile.grade && gradeNumber(profile.grade) <= 2 ? 6 : 4, 0)}>▶</button><button aria-label="Move down" onClick={() => moveHero(0, profile.grade && gradeNumber(profile.grade) <= 2 ? 6 : 4)}>▼</button></div></div>
-          <p className="map-tip"><span>✦</span> Walk near a realm to enter. Mistakes never cost lives or progress.</p>
+          <p className="map-tip"><span>✦</span> Select an unlocked realm to enter immediately. Mistakes never cost lives or progress.</p>{realmNotice && <p className={`realm-notice ${realmNotice.includes('locked') ? 'notice-negative' : ''}`} aria-live="polite">{realmNotice}</p>}
         </section>
       )}
 
@@ -734,7 +805,7 @@ export default function Home() {
       )}
 
       {screen === 'progress' && (
-        <section className="content-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Growing every quest</span><h2>{profile.nickname}’s progress</h2><p>No report-card scores or rankings—just skills getting stronger.</p></div><button className="secondary-action" onClick={() => setScreen('map')}>← Back to map</button></div><div className="progress-overview"><div className="level-medallion"><span>{level}</span><small>Explorer level</small></div><div><strong>{profile.xp} XP earned</strong><p>{profile.completed.length} quests played · {profile.facts.length} facts found · {profile.stars} stars</p><div className="level-progress"><div><i style={{ width: `${profile.xp % 80 / 80 * 100}%` }} /></div><span>{80 - profile.xp % 80} XP until level {level + 1}</span></div></div></div><div className="subject-progress-grid">{(['science', 'math', 'english'] as Subject[]).map((subject) => { const data = profile.progress[subject]; const percent = data.attempts ? Math.round(data.correct / data.attempts * 100) : 0; return <article key={subject} className={`subject-card subject-${subject}`}><span className="subject-icon">{subject === 'science' ? '✿' : subject === 'math' ? '∑' : 'Aa'}</span><h3>{subject[0].toUpperCase() + subject.slice(1)}</h3><strong>{mastery(data.correct, data.attempts)}</strong><div><i style={{ width: `${percent}%` }} /></div><small>{data.correct} discoveries from {data.attempts} tries</small><p>{subject === 'science' ? 'Observe, classify, and explain the living world.' : subject === 'math' ? 'Use numbers, shapes, patterns, and logic.' : 'Read closely, choose words, and build stories.'}</p></article>; })}</div></section>
+        <section className="content-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Growing every quest</span><h2>{profile.nickname}’s {profile.grade ? gradeLabel(profile.grade) : ''} progress</h2><p>No report-card scores or rankings—just skills getting stronger.</p></div><button className="secondary-action" onClick={() => setScreen('map')}>← Back to map</button></div><div className="progress-overview"><div className="level-medallion"><span>{level}</span><small>Explorer level</small></div><div><strong>{profile.xp} XP earned</strong><p>{profile.completed.length} quests played · {profile.facts.length} facts found · {profile.stars} stars</p><div className="level-progress"><div><i style={{ width: `${profile.xp % 80 / 80 * 100}%` }} /></div><span>{80 - profile.xp % 80} XP until level {level + 1}</span></div></div></div><div className="subject-progress-grid">{(['science', 'math', 'english'] as Subject[]).map((subject) => { const data = currentGradeProgress[subject]; const percent = data.attempts ? Math.round(data.correct / data.attempts * 100) : 0; return <article key={subject} className={`subject-card subject-${subject}`}><span className="subject-icon">{subject === 'science' ? '✿' : subject === 'math' ? '∑' : 'Aa'}</span><h3>{subject[0].toUpperCase() + subject.slice(1)}</h3><strong>{mastery(data.correct, data.attempts)}</strong><div><i style={{ width: `${percent}%` }} /></div><small>{data.correct} discoveries from {data.attempts} tries</small><p>{subject === 'science' ? 'Observe, classify, and explain the living world.' : subject === 'math' ? 'Use numbers, shapes, patterns, and logic.' : 'Read closely, choose words, and build stories.'}</p></article>; })}</div></section>
       )}
 
       {screen === 'settings' && (
@@ -745,15 +816,17 @@ export default function Home() {
             <SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" />
             <SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" />
             <article className="narrator-settings" aria-labelledby="narrator-settings-title">
-              <div className="narrator-heading"><span aria-hidden="true">◖</span><div><small>Adventure guide</small><h3 id="narrator-settings-title">Narrator Voice</h3><p>A warm English voice from this device. Nothing is recorded or sent anywhere.</p></div><button type="button" onClick={() => speak(NARRATOR_PREVIEW, true)} disabled={voiceStatus === 'unavailable'}><span aria-hidden="true">▶</span> Preview voice</button></div>
-              <div className="voice-picker"><label htmlFor="narrator-voice">Choose a voice</label>{selectedNarratorVoice?.recommended && <span>Recommended</span>}<select id="narrator-voice" value={selectedNarratorVoice?.voiceURI ?? ''} disabled={!narratorVoices.length} onChange={(event) => updateProfile({ narratorVoiceURI: event.target.value })}>{narratorVoices.length ? narratorVoices.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.recommended ? 'Recommended — ' : ''}{voice.name} ({voice.lang}){voice.localService ? ' · On device' : ''}</option>) : <option value="">{voiceStatus === 'loading' ? 'Finding voices…' : voiceStatus === 'unavailable' ? 'Read-aloud unavailable' : 'Browser’s English voice'}</option>}</select><p>{voiceStatus === 'ready' ? `${selectedNarratorVoice?.name ?? 'The recommended voice'} will guide the next narration.` : voiceStatus === 'loading' ? 'K World is checking the voices installed on this device.' : voiceStatus === 'fallback' ? 'No named English voices were reported, so K World will use the browser’s English fallback.' : 'This browser does not provide speech synthesis. All written instructions remain available.'}</p></div>
-              <div className="narrator-tuning"><label><span><strong>Speaking speed</strong><small>{narratorStyle.style}</small></span><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /><output>{profile.speechRate.toFixed(2)}×</output></label><label><span><strong>Voice tone</strong><small>Natural, with a safe pitch range</small></span><input type="range" min="0.9" max="1.1" step="0.02" value={profile.speechPitch} aria-label="Narration pitch" onChange={(event) => updateProfile({ speechPitch: Number(event.target.value) })} /><output>{profile.speechPitch.toFixed(2)}</output></label></div>
+              <div className="narrator-heading"><span aria-hidden="true">◖</span><div><small>Adventure guide</small><h3 id="narrator-settings-title">Narrator Voice</h3><p>Choose the clearest English voice installed on this device. Nothing is recorded or sent anywhere.</p></div><button type="button" onClick={() => speak(NARRATOR_PREVIEW, true)} disabled={voiceStatus === 'unavailable'}><span aria-hidden="true">▶</span> Preview selected voice</button></div>
+              <div className="narrator-style-picker"><span>Choose a narrator style</span><div>{narratorStyles.map((style) => <button type="button" key={style.id} className={profile.narratorStyle === style.id ? 'selected' : ''} aria-pressed={profile.narratorStyle === style.id} onClick={() => updateProfile({ narratorStyle: style.id as NarratorStyle })}><strong>{style.name}</strong><small>{style.description}</small></button>)}</div></div>
+              <div className="voice-picker"><label htmlFor="narrator-voice">Choose a voice</label>{selectedNarratorVoice?.recommended && <span>Recommended</span>}<select id="narrator-voice" value={selectedNarratorVoice?.voiceURI ?? ''} disabled={!narratorVoices.length} onChange={(event) => updateProfile({ narratorVoiceURI: event.target.value })}>{narratorVoices.length ? narratorVoices.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.recommended ? 'Recommended — ' : ''}{voice.name} ({voice.lang}){voice.quality === 'enhanced' ? ' · Enhanced' : ''}{voice.localService ? ' · On device' : ''}</option>) : <option value="">{voiceStatus === 'loading' ? 'Finding voices…' : voiceStatus === 'unavailable' ? 'Read-aloud unavailable' : 'Browser’s English voice'}</option>}</select><p>{voiceStatus === 'ready' ? selectedNarratorVoice?.quality === 'enhanced' ? `${selectedNarratorVoice.name} is a higher-quality voice available on this device.` : `${selectedNarratorVoice?.name ?? 'This voice'} is the best available system voice. Voice quality depends on what is installed; a Natural or Neural operating-system voice may sound more lifelike.` : voiceStatus === 'loading' ? 'K World is checking the voices installed on this device.' : voiceStatus === 'fallback' ? 'No named English voices were reported. K World will use the browser fallback, which may sound more synthetic.' : 'This browser does not provide speech synthesis. All written instructions remain available.'}</p></div>
+              <div className="narrator-tuning"><label><span><strong>Speaking speed</strong><small>{narratorStyle.style}</small></span><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /><output>{profile.speechRate.toFixed(2)}×</output></label><label><span><strong>Voice tone</strong><small>Small adjustment within a safe pitch range</small></span><input type="range" min="0.9" max="1.1" step="0.02" value={profile.speechPitch} aria-label="Narration pitch" onChange={(event) => updateProfile({ speechPitch: Number(event.target.value) })} /><output>{profile.speechPitch.toFixed(2)}</output></label></div>
               <p className="voice-note"><span aria-hidden="true">✓</span> Uses the browser Speech Synthesis API only. No microphone, account, recording, or paid speech service is needed.</p>
             </article>
             <SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" />
             <SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" />
             <SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" />
-            <article className="setting-card grade-summary-setting"><span>{profile.grade ?? '—'}</span><div><h3>{profile.grade ? gradeLabel(profile.grade) : 'Grade not selected'}</h3><p>A grown-up can change the curriculum grade from the protected Grown-up Corner.</p></div></article>
+            <article className="setting-card grade-summary-setting"><span>{profile.grade ?? '—'}</span><div><h3>{profile.grade ? gradeLabel(profile.grade) : 'Grade not selected'}</h3><p>Switch among Kindergarten through Grade 12. Your hero, rewards, and each grade’s learning history stay safe.</p></div><button onClick={() => openGradeSelector('settings')}>Change grade</button></article>
+            <article className="setting-card dock-position-setting"><span>↔</span><div><h3>Read-aloud control position</h3><p>Move the tile away from stories, questions, and answer choices.</p><div className="dock-placement-buttons" aria-label="Choose narration control position">{(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as ReadDockPlacement[]).map((placement) => <button type="button" key={placement} className={profile.readDockPlacement === placement ? 'selected' : ''} aria-pressed={profile.readDockPlacement === placement} onClick={() => updateProfile({ readDockPlacement: placement })}>{placement.replace('-', ' ')}</button>)}</div></div><button onClick={() => updateProfile({ readDockPlacement: 'bottom-right', readDockCollapsed: false })}>Reset position</button></article>
             <article className="setting-card character-setting"><span>☺</span><div><h3>Character selection</h3><p>Change your hero, class, nickname, outfit, or companion without losing progress.</p></div><button onClick={() => setScreen('character')}>Change hero</button></article>
           </div>
         </section>
@@ -818,9 +891,9 @@ export default function Home() {
           <div className="content-heading"><div><span className="eyebrow"><span>✦</span> Grown-up corner</span><h2>Learning overview</h2><p>A private view of practice and assessments saved on this device.</p></div><button className="secondary-action" onClick={() => setScreen(profile.grade ? 'map' : 'welcome')}>← Back</button></div>
           {!parentUnlocked ? <div className="parent-gate"><span className="gate-icon">7 + 5</span><h3>Quick grown-up check</h3><p>What is seven plus five?</p><div><input inputMode="numeric" value={parentAnswer} onChange={(event) => setParentAnswer(event.target.value)} aria-label="Answer to grown-up check" /><button className="primary-action" onClick={() => { if (parentAnswer.trim() === '12') setParentUnlocked(true); }}>Unlock</button></div><small>This keeps little explorers inside the game.</small></div> : <div className="parent-dashboard">
             <div className="parent-summary"><div><span>{profile.playMinutes}</span><small>Approx. play minutes</small></div><div><span>{profile.completed.length}</span><small>Quests played</small></div><div><span>{profile.assessmentHistory.length}</span><small>Skill checks completed</small></div></div>
-            <article className="parent-report"><h3>Concepts practiced</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(profile.progress[subject].correct, profile.progress[subject].attempts)}</span><small>{profile.progress[subject].attempts} quest attempts</small></div>)}</article>
+            <article className="parent-report"><h3>Concepts practiced in {profile.grade ? gradeLabel(profile.grade) : 'this grade'}</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(currentGradeProgress[subject].correct, currentGradeProgress[subject].attempts)}</span><small>{currentGradeProgress[subject].attempts} quest attempts</small></div>)}</article>
             <article className="next-adventure"><span>⌁</span><div><h3>Assessment snapshot</h3><p>{profile.assessmentHistory.length ? `${profile.assessmentHistory.at(-1)?.title} is ready to review.` : 'No Skill Check yet. Start with a short, untimed Compass Assessment.'}</p><button onClick={() => profile.assessmentHistory.length ? viewReport(profile.assessmentHistory.at(-1)!) : setScreen('assessment-center')}>{profile.assessmentHistory.length ? 'Open latest report' : 'Open Assessment Center'}</button></div></article>
-            <article className="grade-parent-card"><div><span>Grade</span><strong>{profile.grade ? gradeLabel(profile.grade) : 'Choose a grade'}</strong><p>Changing grade updates future quests and assessments without removing progress.</p></div><select value={profile.grade ?? ''} aria-label="Change curriculum grade" onChange={(event) => { const grade = event.target.value as GradeLevel; setSelectedGrade(grade); updateProfile({ grade }); }}><option value="" disabled>Choose grade</option>{gradeLevels.map((option) => <option key={option.grade} value={option.grade}>{option.label}</option>)}</select></article>
+            <article className="grade-parent-card"><div><span>Grade</span><strong>{profile.grade ? gradeLabel(profile.grade) : 'Choose a grade'}</strong><p>Changing grade updates future quests and assessments without removing progress.</p></div><button type="button" onClick={() => openGradeSelector('parent')}>Choose another grade</button></article>
             <article className="assessment-history-card"><div className="history-title"><div><h3>Assessment history</h3><p>Assessment results are separate from ordinary quest practice.</p></div><button onClick={() => setScreen('assessment-center')}>Start new check</button></div>{profile.assessmentHistory.length ? <div className="history-list">{[...profile.assessmentHistory].reverse().map((report) => { const trend = assessmentTrend(report, profile.assessmentHistory); return <button key={report.id} onClick={() => viewReport(report)}><span><strong>{report.title}</strong><small>{new Date(report.completedAt).toLocaleDateString()} · {report.attempts} clues · {report.minutes} min · {trend.label}</small></span><em>{report.correct}/{report.attempts}</em></button>; })}</div> : <EmptyCollection text="Completed Compass Assessments will appear here." />}</article>
             <article className="learning-resources"><h3>Learning resources</h3><p>These independent educational organizations informed K World’s curriculum coverage and grade progression. All K World questions, passages, hints, and stories are original; no third-party lessons or assets are reproduced, and no affiliation or endorsement is implied.</p><div>{learningResources.map((resource) => <a key={resource.name} href={resource.url} target="_blank" rel="noreferrer">{resource.name}<span aria-hidden="true">↗</span></a>)}</div></article>
             <p className="assessment-disclaimer">K World reports describe activity inside this game. They are not medical, psychological, diagnostic, or official school assessments.</p>
@@ -828,7 +901,7 @@ export default function Home() {
           </div>}
         </section>
       )}
-      <ReadAloudDock text={screenNarration} spokenText={spokenText} spokenWordIndex={spokenWordIndex} state={speechState} enabled={profile.narration} onRead={() => speak(screenNarration, true)} onToggle={toggleSpeech} onStop={stopSpeech} />
+      <ReadAloudDock text={screenNarration} spokenText={spokenText} spokenWordIndex={spokenWordIndex} state={speechState} enabled={profile.narration} placement={profile.readDockPlacement} collapsed={profile.readDockCollapsed} onPlacementChange={(placement) => updateProfile({ readDockPlacement: placement })} onCollapsedChange={(collapsed) => updateProfile({ readDockCollapsed: collapsed })} onRead={() => speak(screenNarration, true)} onToggle={toggleSpeech} onStop={stopSpeech} />
     </main>
   );
 }
@@ -869,8 +942,8 @@ function ActivityResponse({ activity, correct, locked, selectedAnswer, orderItem
   return <form className="structured-activity numeric-activity" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><label htmlFor={`numeric-${activity.id}`}>Your number</label><div><input id={`numeric-${activity.id}`} type="number" step="any" inputMode="decimal" value={numericAnswer} onChange={(event) => onNumericChange(event.target.value)} disabled={locked} aria-describedby={`numeric-help-${activity.id}`} /><span>{activity.suffix}</span><ReadButton label="Read numeric instructions aloud" onRead={() => onRead(activityNarration(activity))} /></div><small id={`numeric-help-${activity.id}`}>Numbers only. Decimals such as 2.5 are welcome.</small><button className="submit-activity" type="submit" disabled={locked || numericAnswer.trim() === ''}>Check my number</button></form>;
 }
 
-function GameHeader({ profile, level, screen, onNavigate, onSound }: { profile: Profile; level: number; screen: Screen; onNavigate: (screen: Screen) => void; onSound: () => void }) {
-  return <header className="game-header"><button className="brand brand-button" onClick={() => onNavigate('map')}><span className="brand-mark">K</span><span>K WORLD</span></button><nav aria-label="Explorer menu"><button onClick={() => onNavigate('character')}><span>☺</span>Hero</button><button className={screen === 'backpack' ? 'active' : ''} onClick={() => onNavigate('backpack')}><span>◇</span>Backpack</button><button className={screen === 'progress' || screen === 'mastery' ? 'active' : ''} onClick={() => onNavigate('progress')}><span>↗</span>Progress</button><button className={screen === 'assessment-center' ? 'active' : ''} onClick={() => onNavigate('assessment-center')}><span>⌁</span>Assess</button><button className={screen === 'parent' || screen === 'assessment-report' ? 'active' : ''} onClick={() => onNavigate('parent')}><span>○</span>Grown-ups</button></nav><div className="player-hud"><button className="header-icon" onClick={onSound} aria-label={profile.sound ? 'Turn sound off' : 'Turn sound on'}>{profile.sound ? '♫' : '×'}</button><button className="header-icon" onClick={() => onNavigate('settings')} aria-label="Settings">⚙</button><div className="hud-stars"><span>★</span><strong>{profile.stars}</strong></div><div className="hud-grade" aria-label={profile.grade ? gradeLabel(profile.grade) : 'Grade not selected'}>{profile.grade ?? '—'}</div><div className="hud-profile"><Avatar profile={profile} small /><div><strong>{profile.nickname}</strong><span>Level {level} · {profile.explorerClass}</span></div></div></div></header>;
+function GameHeader({ profile, level, screen, onNavigate, onSound, onGrade }: { profile: Profile; level: number; screen: Screen; onNavigate: (screen: Screen) => void; onSound: () => void; onGrade: () => void }) {
+  return <header className="game-header"><button className="brand brand-button" onClick={() => onNavigate('map')}><span className="brand-mark">K</span><span>K WORLD</span></button><nav aria-label="Explorer menu"><button onClick={() => onNavigate('character')}><span>☺</span>Hero</button><button className={screen === 'backpack' ? 'active' : ''} onClick={() => onNavigate('backpack')}><span>◇</span>Backpack</button><button className={screen === 'progress' || screen === 'mastery' ? 'active' : ''} onClick={() => onNavigate('progress')}><span>↗</span>Progress</button><button className={screen === 'assessment-center' ? 'active' : ''} onClick={() => onNavigate('assessment-center')}><span>⌁</span>Assess</button><button className={screen === 'parent' || screen === 'assessment-report' ? 'active' : ''} onClick={() => onNavigate('parent')}><span>○</span>Grown-ups</button></nav><div className="player-hud"><button className="header-icon" onClick={onSound} aria-label={profile.sound ? 'Turn sound off' : 'Turn sound on'}>{profile.sound ? '♫' : '×'}</button><button className="header-icon" onClick={() => onNavigate('settings')} aria-label="Settings">⚙</button><div className="hud-stars"><span>★</span><strong>{profile.stars}</strong></div><button className="hud-grade" onClick={onGrade} aria-label={profile.grade ? `Change grade, currently ${gradeLabel(profile.grade)}` : 'Choose grade'}>{profile.grade ?? '—'}</button><div className="hud-profile"><Avatar profile={profile} small /><div><strong>{profile.nickname}</strong><span>Level {level} · {profile.explorerClass}</span></div></div></div></header>;
 }
 
 function EmptyCollection({ text }: { text: string }) { return <div className="empty-collection"><span>✦</span><p>{text}</p></div>; }
@@ -883,11 +956,63 @@ function ReadButton({ label, onRead }: { label: string; onRead: () => void }) {
   return <button className="read-button" type="button" onClick={onRead} aria-label={label}><span aria-hidden="true">🔊</span><span>Read to me</span></button>;
 }
 
-function ReadAloudDock({ text, spokenText, spokenWordIndex, state, enabled, onRead, onToggle, onStop }: { text: string; spokenText: string; spokenWordIndex: number; state: 'idle' | 'speaking' | 'paused'; enabled: boolean; onRead: () => void; onToggle: () => void; onStop: () => void }) {
+function ReadAloudDock({ text, spokenText, spokenWordIndex, state, enabled, placement, collapsed, onPlacementChange, onCollapsedChange, onRead, onToggle, onStop }: { text: string; spokenText: string; spokenWordIndex: number; state: 'idle' | 'speaking' | 'paused'; enabled: boolean; placement: ReadDockPlacement; collapsed: boolean; onPlacementChange: (placement: ReadDockPlacement) => void; onCollapsedChange: (collapsed: boolean) => void; onRead: () => void; onToggle: () => void; onStop: () => void }) {
+  const dockRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number; moved: boolean } | null>(null);
+  const ignoreMoveClickRef = useRef(false);
+  const [draftPosition, setDraftPosition] = useState<{ left: number; top: number } | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [movementAnnouncement, setMovementAnnouncement] = useState('');
+  const previousPlacementRef = useRef(placement);
   const words = spokenText.split(/\s+/).filter(Boolean);
-  return <aside className={`read-aloud-dock ${state !== 'idle' ? 'is-reading' : ''}`} aria-label="Read aloud controls">
-    {state !== 'idle' && <div className="spoken-caption" aria-live="polite">{words.map((word, index) => <span className={index === spokenWordIndex ? 'spoken-now' : index < spokenWordIndex ? 'spoken-past' : ''} key={`${word}-${index}`}>{word} </span>)}</div>}
-    <div className="read-controls"><button className="dock-main" onClick={state === 'idle' ? onRead : onToggle}><span aria-hidden="true">{state === 'speaking' ? 'Ⅱ' : '🔊'}</span>{state === 'speaking' ? 'Pause' : state === 'paused' ? 'Continue' : 'Read this screen'}</button>{state !== 'idle' && <><button onClick={() => { onStop(); setTimeout(onRead, 30); }} aria-label="Replay narration">↻</button><button onClick={onStop} aria-label="Stop narration">■</button></>}<span className="narration-status">{enabled ? 'Read-aloud on' : 'Tap anytime to listen'}</span></div>
+  useEffect(() => {
+    if (previousPlacementRef.current === placement) return;
+    previousPlacementRef.current = placement;
+    setDraftPosition(null); setMoving(false);
+    setMovementAnnouncement(`Narration controls moved to ${placement.replace('-', ' ')}.`);
+  }, [placement]);
+  const clampPosition = useCallback((left: number, top: number) => {
+    const dock = dockRef.current;
+    if (!dock || typeof window === 'undefined') return { left, top };
+    const margin = 10;
+    const mobileNavSpace = window.innerWidth <= 760 ? 74 : margin;
+    return { left: Math.min(Math.max(margin, left), Math.max(margin, window.innerWidth - dock.offsetWidth - margin)), top: Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - dock.offsetHeight - mobileNavSpace)) };
+  }, []);
+  const snapDock = useCallback((position: { left: number; top: number }) => {
+    const dock = dockRef.current;
+    if (!dock || typeof window === 'undefined') return;
+    const horizontal = position.left + dock.offsetWidth / 2 < window.innerWidth / 2 ? 'left' : 'right';
+    const vertical = position.top + dock.offsetHeight / 2 < window.innerHeight / 2 ? 'top' : 'bottom';
+    const nextPlacement = `${vertical}-${horizontal}` as ReadDockPlacement;
+    onPlacementChange(nextPlacement);
+    setDraftPosition(null); setMoving(false);
+    setMovementAnnouncement(`Narration controls moved to ${vertical} ${horizontal}.`);
+  }, [onPlacementChange]);
+  const beginKeyboardMove = () => {
+    const bounds = dockRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    setDraftPosition({ left: bounds.left, top: bounds.top }); setMoving(true);
+    setMovementAnnouncement('Move mode started. Use the arrow keys, then press Enter to place the narration controls.');
+  };
+  const onMoveHandleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!moving && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); beginKeyboardMove(); return; }
+    if (!moving) return;
+    if (event.key === 'Escape') { event.preventDefault(); setDraftPosition(null); setMoving(false); setMovementAnnouncement('Move cancelled.'); return; }
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (draftPosition) snapDock(draftPosition); return; }
+    if (!event.key.startsWith('Arrow')) return;
+    event.preventDefault();
+    const distance = event.shiftKey ? 40 : 18;
+    setDraftPosition((current) => {
+      if (!current) return current;
+      const left = current.left + (event.key === 'ArrowRight' ? distance : event.key === 'ArrowLeft' ? -distance : 0);
+      const top = current.top + (event.key === 'ArrowDown' ? distance : event.key === 'ArrowUp' ? -distance : 0);
+      return clampPosition(left, top);
+    });
+  };
+  return <aside ref={dockRef} style={draftPosition ? { left: `${draftPosition.left}px`, top: `${draftPosition.top}px`, right: 'auto', bottom: 'auto' } : undefined} className={`read-aloud-dock dock-${placement} ${state !== 'idle' ? 'is-reading' : ''} ${moving ? 'dock-moving' : ''} ${collapsed ? 'dock-collapsed' : ''}`} aria-label="Read aloud controls">
+    {state !== 'idle' && !collapsed && <div className="spoken-caption" aria-live="polite">{words.map((word, index) => <span className={index === spokenWordIndex ? 'spoken-now' : index < spokenWordIndex ? 'spoken-past' : ''} key={`${word}-${index}`}>{word} </span>)}</div>}
+    <div className="read-controls"><button className="dock-move-handle" type="button" aria-label="Move narration controls" aria-pressed={moving} title="Move narration controls" onKeyDown={onMoveHandleKeyDown} onClick={() => { if (ignoreMoveClickRef.current) { ignoreMoveClickRef.current = false; return; } if (!moving) beginKeyboardMove(); }} onPointerDown={(event) => { const bounds = dockRef.current?.getBoundingClientRect(); if (!bounds) return; event.currentTarget.setPointerCapture(event.pointerId); dragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top, moved: false }; setDraftPosition({ left: bounds.left, top: bounds.top }); setMoving(true); setMovementAnnouncement('Move mode started. Drag the handle, or use arrow keys and press Enter to place the narration controls.'); }} onPointerMove={(event) => { const drag = dragRef.current; if (!drag || drag.pointerId !== event.pointerId) return; drag.moved = true; setDraftPosition(clampPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY)); }} onPointerUp={(event) => { const drag = dragRef.current; if (!drag || drag.pointerId !== event.pointerId) return; event.currentTarget.releasePointerCapture(event.pointerId); ignoreMoveClickRef.current = drag.moved; dragRef.current = null; if (drag.moved) snapDock(clampPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY)); }}><span aria-hidden="true">⠿</span></button><button className="dock-main" onClick={state === 'idle' ? onRead : onToggle}><span aria-hidden="true">{state === 'speaking' ? 'Ⅱ' : '🔊'}</span>{state === 'speaking' ? 'Pause' : state === 'paused' ? 'Continue' : 'Read this screen'}</button>{state !== 'idle' && <><button onClick={() => { onStop(); setTimeout(onRead, 30); }} aria-label="Replay narration">↻</button><button onClick={onStop} aria-label="Stop narration">■</button></>}<button type="button" className="dock-collapse" onClick={() => onCollapsedChange(!collapsed)} aria-label={collapsed ? 'Expand narration controls' : 'Collapse narration controls'} aria-expanded={!collapsed}>{collapsed ? '▢' : '−'}</button>{!collapsed && <span className="narration-status">{enabled ? 'Read-aloud on' : 'Tap anytime to listen'}</span>}</div>
+    <span className="sr-only" aria-live="polite">{movementAnnouncement}</span>
     <span className="sr-only">Text ready to read: {text}</span>
   </aside>;
 }

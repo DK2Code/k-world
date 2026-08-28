@@ -125,7 +125,7 @@ const rankedVoices = rankNarratorVoices([
   { voiceURI: 'natural', name: 'Microsoft Aria Online (Natural)', lang: 'en-US', localService: false, default: false },
   { voiceURI: 'spanish', name: 'Natural Spanish', lang: 'es-MX', localService: true, default: false },
 ]);
-if (rankedVoices.length !== 2 || rankedVoices[0].voiceURI !== 'natural' || !rankedVoices[0].recommended) fail('Narrator voice ranking did not prefer the suitable natural English voice.');
+if (rankedVoices.length !== 2 || rankedVoices[0].voiceURI !== 'natural' || !rankedVoices[0].recommended || rankedVoices[0].quality !== 'enhanced') fail('Narrator voice ranking did not prefer and identify the suitable natural English voice.');
 if (resolveNarratorVoice(rankedVoices, 'missing')?.voiceURI !== 'natural' || resolveNarratorVoice([], 'missing') !== undefined) fail('Narrator voice fallback selection failed.');
 const speechFriendly = prepareNarrationText('✦ Solve 8 × 4 = 32. Earn 5 XP.');
 if (!speechFriendly.includes('8 times 4 equals 32') || !speechFriendly.includes('explorer points') || speechFriendly.includes('✦')) fail('Narration text preparation did not translate educational symbols and decorative text.');
@@ -133,8 +133,12 @@ if (splitNarration('First, notice the clues. Next, compare the evidence. Finally
 const earlyDelivery = narrationDelivery('K', .9, 1);
 const highDelivery = narrationDelivery('12', .9, 1.1);
 if (earlyDelivery.rate >= highDelivery.rate || earlyDelivery.pauseMs <= highDelivery.pauseMs || highDelivery.pitch > 1.01) fail('Grade-aware narrator delivery is not sufficiently distinct or mature.');
-const narrationProfile = migrateProfile({ narratorVoiceURI: 'saved-voice', speechRate: 9, speechPitch: .2 });
-if (narrationProfile.narratorVoiceURI !== 'saved-voice' || narrationProfile.speechRate !== 1.2 || narrationProfile.speechPitch !== .9) fail('Narrator preference migration or safe limits failed.');
+const storytellerDelivery = narrationDelivery('5', .9, 1, 'storyteller', 1, 'Notice the clues before you choose.');
+const coachDelivery = narrationDelivery('5', .9, 1, 'coach', 2, 'Choose the strongest answer?');
+if (storytellerDelivery.pauseMs <= coachDelivery.pauseMs || storytellerDelivery.style === coachDelivery.style) fail('Narrator styles did not produce distinct pacing and labels.');
+const narrationProfile = migrateProfile({ narratorVoiceURI: 'saved-voice', narratorStyle: 'storyteller', speechRate: 9, speechPitch: .2, readDockPlacement: 'top-left', readDockCollapsed: true, grade: '5', progress: { math: { correct: 4, attempts: 6 } }, gradeProgress: { '3': { science: { correct: 2, attempts: 3 } } } });
+if (narrationProfile.narratorVoiceURI !== 'saved-voice' || narrationProfile.narratorStyle !== 'storyteller' || narrationProfile.speechRate !== 1.2 || narrationProfile.speechPitch !== .9) fail('Narrator preference migration or safe limits failed.');
+if (narrationProfile.readDockPlacement !== 'top-left' || !narrationProfile.readDockCollapsed || narrationProfile.gradeProgress['3']?.science.correct !== 2 || narrationProfile.gradeProgress['5']?.math.correct !== 4) fail('Movable narration controls or per-grade progress did not migrate safely.');
 
 if (errors.length) {
   console.error(`Content validation failed with ${errors.length} issue${errors.length === 1 ? '' : 's'}:`);
