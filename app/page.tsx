@@ -2,22 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-type AgeGroup = '5–7' | '8–10' | '11–13';
-type Subject = 'science' | 'math' | 'english';
+import { isActivityCorrect } from '@/content/evaluation.ts';
+import { selectQuestActivities, selectQuestVariant } from '@/content/rotation.ts';
+import { ageGroups, factsFor, learningResources, questVariants, regions } from '@/content/world.ts';
+import type { Activity, AgeGroup, QuestVariant, RegionId, Subject, WonderFact } from '@/content/types.ts';
+
 type Screen = 'welcome' | 'character' | 'intro' | 'map' | 'region' | 'game' | 'rewards' | 'backpack' | 'progress' | 'settings' | 'parent';
-
-type Question = {
-  subject: Subject;
-  prompt: string;
-  choices: string[];
-  answer: string;
-  hint: string;
-  explanation: string;
-  token: string;
-  activity?: string;
-};
-
-type QuestVariant = { id: string; title: string; activity: string; intro: string };
 
 type Profile = {
   age: AgeGroup | null;
@@ -45,186 +35,17 @@ type Profile = {
   worldPosition: { x: number; y: number };
   questHistory: Record<string, string[]>;
   questionHistory: Record<string, string[]>;
+  factHistory: Record<string, string[]>;
 };
 
 const STORE_KEY = 'kworld-adventure-v1';
-const ageGroups: { range: AgeGroup; label: string; note: string; color: string }[] = [
-  { range: '5–7', label: 'Little Explorer', note: 'Big pictures & gentle puzzles', color: 'coral' },
-  { range: '8–10', label: 'Brave Adventurer', note: 'Stories, riddles & discoveries', color: 'gold' },
-  { range: '11–13', label: 'Master Pathfinder', note: 'Deeper quests & challenges', color: 'violet' },
-];
-
-const regions = [
-  { id: 'science', name: 'Science Jungle', short: 'Science', icon: '✿', color: '#2ea875', subject: 'science' as Subject, level: 1, guide: 'Professor Pip', guideIcon: '●', description: 'A living laboratory where every leaf hides a discovery.', position: { x: 17, y: 25 } },
-  { id: 'math', name: 'Number Kingdom', short: 'Math', icon: '∑', color: '#f39a45', subject: 'math' as Subject, level: 1, guide: 'Sir Sum-a-Lot', guideIcon: '◆', description: 'Repair the royal starship with patterns and number power.', position: { x: 48, y: 47 } },
-  { id: 'english', name: 'Storybook Forest', short: 'English', icon: 'Aa', color: '#7457d9', subject: 'english' as Subject, level: 1, guide: 'Willa Wordwing', guideIcon: '✦', description: 'Words grow on trees and every path begins a new tale.', position: { x: 80, y: 24 } },
-  { id: 'puzzle', name: 'Puzzle Peaks', short: 'Mixed quest', icon: '◈', color: '#4b8fd6', subject: 'mixed' as const, level: 2, guide: 'Yeti Yara', guideIcon: '▲', description: 'A mountaintop trial that mixes every explorer skill.', position: { x: 25, y: 76 } },
-  { id: 'inventor', name: "Inventor's Island", short: 'STEM', icon: '⚙', color: '#dc6270', subject: 'mixed' as const, level: 3, guide: 'Tinker Tavi', guideIcon: '■', description: 'Build, test, improve—then make something brilliant.', position: { x: 76, y: 76 } },
-];
-
-const facts: Record<AgeGroup, Record<string, string>> = {
-  '5–7': {
-    science: 'A butterfly tastes with its feet!', math: 'A triangle always has three sides and three corners.', english: 'Every sentence begins with a capital letter.',
-    puzzle: 'Your brain grows stronger when you try a new kind of puzzle.', inventor: 'Inventors test ideas, learn what happened, and try again.',
-  },
-  '8–10': {
-    science: 'A teaspoon of healthy soil can hold more living things than there are people on Earth.', math: 'A fraction describes equal parts of one whole.', english: 'A synonym is a word with the same or a very similar meaning.',
-    puzzle: 'Breaking a hard problem into smaller parts is a powerful strategy.', inventor: 'A prototype is an early model used to test an idea.',
-  },
-  '11–13': {
-    science: 'Plants transform light energy into chemical energy during photosynthesis.', math: 'A percentage is a ratio measured out of one hundred.', english: 'A metaphor compares unlike things without using “like” or “as.”',
-    puzzle: 'Logic puzzles use rules and deduction to eliminate impossible answers.', inventor: 'Engineers improve designs by testing, measuring, and iterating.',
-  },
-};
-
-const questions: Record<AgeGroup, Record<Subject, Question[]>> = {
-  '5–7': {
-    science: [
-      { subject: 'science', token: '≈', prompt: 'Pip found a frog. Where will it feel most at home?', choices: ['A pond', 'A dry desert', 'A snowy peak'], answer: 'A pond', hint: 'Frogs need water to keep their skin moist.', explanation: 'Frogs are amphibians. Most frogs live near fresh water such as ponds.', },
-      { subject: 'science', token: '✿', prompt: 'Which part of a plant drinks up water from the soil?', choices: ['Roots', 'Flowers', 'Fruit'], answer: 'Roots', hint: 'Look below the ground.', explanation: 'Roots hold a plant in place and absorb water from the soil.', },
-      { subject: 'science', token: '☾', prompt: 'Which animal is usually awake at night?', choices: ['Owl', 'Butterfly', 'Chicken'], answer: 'Owl', hint: 'It has large eyes and says “hoot.”', explanation: 'Many owls are nocturnal, which means they are active at night.', },
-    ],
-    math: [
-      { subject: 'math', token: '4+3', prompt: 'Four moon-mice meet three more. How many are there altogether?', choices: ['6', '7', '8'], answer: '7', hint: 'Start at 4 and count forward 3 steps.', explanation: '4 + 3 = 7.', },
-      { subject: 'math', token: '10−2', prompt: 'Ten glow-gems are in the chest. Two roll away. How many remain?', choices: ['7', '8', '12'], answer: '8', hint: 'Count backward twice from 10.', explanation: '10 − 2 = 8.', },
-      { subject: 'math', token: '2 4 6', prompt: 'The stepping stones say 2, 4, 6... Which number comes next?', choices: ['7', '8', '10'], answer: '8', hint: 'The pattern adds 2 each time.', explanation: 'Adding 2 after 6 gives 8.', },
-    ],
-    english: [
-      { subject: 'english', token: 'Aa', prompt: 'Choose the word that completes the story: “The fox ___ fast.”', choices: ['runs', 'blue', 'under'], answer: 'runs', hint: 'Which word tells what the fox does?', explanation: '“Runs” is the action word, so it completes the sentence.', },
-      { subject: 'english', token: '•••', prompt: 'Which word is spelled correctly?', choices: ['frog', 'froh', 'farg'], answer: 'frog', hint: 'Listen for the sounds: f–r–o–g.', explanation: 'Frog is spelled F-R-O-G.', },
-      { subject: 'english', token: '?', prompt: 'Which mark belongs at the end? “Where is the treasure__”', choices: ['?', '.', '!'], answer: '?', hint: 'The sentence asks something.', explanation: 'A question mark goes at the end of a question.', },
-    ],
-  },
-  '8–10': {
-    science: [
-      { subject: 'science', token: '≈', prompt: 'A newly hatched frog is swimming with a tail. What is it called?', choices: ['Tadpole', 'Larva', 'Fledgling'], answer: 'Tadpole', hint: 'It begins with the letter T.', explanation: 'A young frog begins life as a tadpole and changes through metamorphosis.', },
-      { subject: 'science', token: '☀', prompt: 'What do green plants use to make their own food?', choices: ['Sunlight', 'Moonlight', 'Soil alone'], answer: 'Sunlight', hint: 'It gives Earth light and warmth.', explanation: 'Plants use sunlight, water, and carbon dioxide during photosynthesis.', },
-      { subject: 'science', token: '◎', prompt: 'Which body part pumps blood around your body?', choices: ['Heart', 'Lungs', 'Stomach'], answer: 'Heart', hint: 'You can feel it beating in your chest.', explanation: 'The heart is a muscle that pumps blood through blood vessels.', },
-    ],
-    math: [
-      { subject: 'math', token: '8×4', prompt: 'Eight dragon hatchlings each need four glow-berries. How many berries do they need?', choices: ['24', '32', '36'], answer: '32', hint: 'Add 8 four times, or multiply 8 by 4.', explanation: '8 × 4 = 32 glow-berries.', },
-      { subject: 'math', token: '¾', prompt: 'The crew found ¾ of 20 star-coins. How many coins is that?', choices: ['5', '15', '16'], answer: '15', hint: 'One quarter of 20 is 5. Now take three groups.', explanation: '¾ of 20 is 3 × 5, which equals 15.', },
-      { subject: 'math', token: '6×5', prompt: 'A garden is 6 steps long and 5 steps wide. What is its area?', choices: ['11', '22', '30'], answer: '30', hint: 'Area of a rectangle is length × width.', explanation: '6 × 5 = 30 square steps.', },
-    ],
-    english: [
-      { subject: 'english', token: '≈', prompt: 'Choose a synonym for “enormous.”', choices: ['Huge', 'Tiny', 'Quiet'], answer: 'Huge', hint: 'A synonym has a similar meaning.', explanation: 'Huge and enormous both mean very large.', },
-      { subject: 'english', token: 'Aa', prompt: 'Which sentence uses capitals correctly?', choices: ['Mira visited london.', 'mira visited London.', 'Mira visited London.'], answer: 'Mira visited London.', hint: 'Names of people and cities need capitals.', explanation: 'Mira and London are proper nouns, so both begin with capital letters.', },
-      { subject: 'english', token: '☁', prompt: '“The path was slick, so Jo walked carefully.” What does slick mean?', choices: ['Slippery', 'Bright', 'Narrow'], answer: 'Slippery', hint: 'Why would Jo need to walk carefully?', explanation: 'The context clue “walked carefully” tells us slick means slippery.', },
-    ],
-  },
-  '11–13': {
-    science: [
-      { subject: 'science', token: 'CO₂', prompt: 'Which gas do plants absorb during photosynthesis?', choices: ['Carbon dioxide', 'Oxygen', 'Nitrogen only'], answer: 'Carbon dioxide', hint: 'Humans breathe this gas out.', explanation: 'Plants use carbon dioxide and water to make glucose, releasing oxygen.', },
-      { subject: 'science', token: 'G', prompt: 'Which force keeps planets in orbit around the Sun?', choices: ['Gravity', 'Friction', 'Magnetism'], answer: 'Gravity', hint: 'It also pulls objects toward Earth.', explanation: 'The Sun’s gravity continually bends each planet’s path into an orbit.', },
-      { subject: 'science', token: '↻', prompt: 'What role do fungi often play in an ecosystem?', choices: ['Decomposer', 'Producer', 'Pollinator only'], answer: 'Decomposer', hint: 'They break down dead material.', explanation: 'Many fungi recycle nutrients by decomposing dead organisms.', },
-    ],
-    math: [
-      { subject: 'math', token: '25%', prompt: 'A shield has 80 energy units. It uses 25%. How many units were used?', choices: ['20', '25', '60'], answer: '20', hint: '25% is the same as one quarter.', explanation: 'One quarter of 80 is 20.', },
-      { subject: 'math', token: '⅓+⅓', prompt: 'What is ⅓ + ⅓?', choices: ['⅔', '⅙', '1'], answer: '⅔', hint: 'The denominators match, so add the numerators.', explanation: 'One third plus one third equals two thirds.', },
-      { subject: 'math', token: 'd÷t', prompt: 'A skyship travels 150 km in 3 hours. What is its average speed?', choices: ['45 km/h', '50 km/h', '75 km/h'], answer: '50 km/h', hint: 'Divide distance by time.', explanation: '150 ÷ 3 = 50 kilometers per hour.', },
-    ],
-    english: [
-      { subject: 'english', token: '≈', prompt: 'Which sentence contains a metaphor?', choices: ['The moon was a silver coin.', 'The moon shone brightly.', 'The moon looked like a coin.'], answer: 'The moon was a silver coin.', hint: 'A metaphor compares without “like” or “as.”', explanation: 'The sentence directly describes the moon as a silver coin.', },
-      { subject: 'english', token: '→', prompt: 'Which sentence uses active voice?', choices: ['Nia solved the riddle.', 'The riddle was solved by Nia.', 'The riddle had been solved.'], answer: 'Nia solved the riddle.', hint: 'In active voice, the subject performs the action.', explanation: 'Nia is the subject, and she performs the action “solved.”', },
-      { subject: 'english', token: ';', prompt: 'Choose the best punctuation: “The storm passed__ the explorers continued.”', choices: [';', ',', ':'], answer: ';', hint: 'Both sides could stand as complete sentences.', explanation: 'A semicolon can join two closely related independent clauses.', },
-    ],
-  },
-};
-
-const extraQuestions: Record<AgeGroup, Record<Subject, Question[]>> = {
-  '5–7': {
-    science: [
-      { subject: 'science', activity: 'Weather Watch', token: '☀', prompt: 'Which object gives Earth light during the day?', choices: ['The Sun', 'The Moon', 'A cloud'], answer: 'The Sun', hint: 'It looks bright in the daytime sky.', explanation: 'The Sun is a star that gives Earth light and warmth.' },
-      { subject: 'science', activity: 'Animal Detective', token: '羽', prompt: 'Which covering helps a bird fly and stay warm?', choices: ['Feathers', 'Scales', 'Shells'], answer: 'Feathers', hint: 'Birds have many light, soft ones.', explanation: 'Feathers help birds fly, stay warm, and keep dry.' },
-      { subject: 'science', activity: 'Water Lab', token: '❄', prompt: 'What happens to water when it gets very cold?', choices: ['It freezes', 'It grows', 'It glows'], answer: 'It freezes', hint: 'Think about an ice cube.', explanation: 'Water freezes and becomes solid ice when it gets cold enough.' },
-    ],
-    math: [
-      { subject: 'math', activity: 'Shape Builder', token: '□', prompt: 'Which shape has four equal sides?', choices: ['Square', 'Triangle', 'Circle'], answer: 'Square', hint: 'It looks like a box face.', explanation: 'A square has four straight sides that are all the same length.' },
-      { subject: 'math', activity: 'Berry Counter', token: '5+5', prompt: 'Five red berries and five blue berries fill a basket. How many berries are there?', choices: ['8', '10', '12'], answer: '10', hint: 'Count on five more from 5.', explanation: '5 + 5 = 10 berries.' },
-      { subject: 'math', activity: 'Number Gate', token: '9>6', prompt: 'Which number is greater?', choices: ['9', '6', 'They match'], answer: '9', hint: 'The greater number is farther along when you count.', explanation: 'Nine is greater than six.' },
-    ],
-    english: [
-      { subject: 'english', activity: 'Rhyme Catch', token: '♫', prompt: 'Which word rhymes with cat?', choices: ['Hat', 'Cup', 'Dog'], answer: 'Hat', hint: 'Rhyming words have the same ending sound.', explanation: 'Cat and hat both end with the “at” sound.' },
-      { subject: 'english', activity: 'Sound Search', token: 'B', prompt: 'Which word begins with the same sound as ball?', choices: ['Boat', 'Moon', 'Sun'], answer: 'Boat', hint: 'Listen for the “b” sound.', explanation: 'Ball and boat both begin with the letter B sound.' },
-      { subject: 'english', activity: 'Word Garden', token: '+s', prompt: 'There is one star. Now there are two ___.', choices: ['stars', 'star', 'starred'], answer: 'stars', hint: 'We often add S when there is more than one.', explanation: 'Stars is the plural word for more than one star.' },
-    ],
-  },
-  '8–10': {
-    science: [
-      { subject: 'science', activity: 'Matter Mixer', token: 'H₂O', prompt: 'Ice melts into liquid water. What caused this change?', choices: ['Heat energy', 'Gravity alone', 'A shadow'], answer: 'Heat energy', hint: 'Melting happens when a solid gets warmer.', explanation: 'Ice absorbs heat energy and changes from a solid into a liquid.' },
-      { subject: 'science', activity: 'Food-Chain Rescue', token: '→', prompt: 'In grass → rabbit → fox, which organism is the producer?', choices: ['Grass', 'Rabbit', 'Fox'], answer: 'Grass', hint: 'A producer makes its own food using sunlight.', explanation: 'Grass is a plant, so it makes food through photosynthesis.' },
-      { subject: 'science', activity: 'Space Signal', token: '♁', prompt: 'Which planet is known for its large rings?', choices: ['Saturn', 'Mercury', 'Mars'], answer: 'Saturn', hint: 'Its rings are made mostly of ice and rock.', explanation: 'Saturn has the most visible ring system in our solar system.' },
-    ],
-    math: [
-      { subject: 'math', activity: 'Castle Perimeter', token: 'P', prompt: 'A square garden has sides of 7 metres. What is its perimeter?', choices: ['14 m', '28 m', '49 m'], answer: '28 m', hint: 'Add all four equal sides.', explanation: '7 + 7 + 7 + 7 = 28 metres.' },
-      { subject: 'math', activity: 'Fair Share', token: '24÷6', prompt: 'Twenty-four moon cakes are shared equally among six crews. How many does each crew get?', choices: ['4', '6', '18'], answer: '4', hint: 'Find the number that makes 6 × something equal 24.', explanation: '24 ÷ 6 = 4 moon cakes per crew.' },
-      { subject: 'math', activity: 'Fraction Forge', token: '½', prompt: 'Which fraction is equal to one half?', choices: ['2/4', '1/3', '3/4'], answer: '2/4', hint: 'Two of four equal parts is half of all four.', explanation: 'Dividing the top and bottom of 2/4 by 2 gives 1/2.' },
-    ],
-    english: [
-      { subject: 'english', activity: 'Verb Vine', token: 'RUN', prompt: 'Which word is the verb in “The silver bird sings softly”?', choices: ['sings', 'silver', 'softly'], answer: 'sings', hint: 'A verb shows an action or state.', explanation: 'Sings tells what the bird is doing.' },
-      { subject: 'english', activity: 'Prefix Portal', token: 're-', prompt: 'What does the prefix re- mean in rebuild?', choices: ['Again', 'Before', 'Not'], answer: 'Again', hint: 'To replay is to play one more time.', explanation: 'The prefix re- often means again, so rebuild means build again.' },
-      { subject: 'english', activity: 'Clue Finder', token: '⌕', prompt: '“Lena packed boots and a raincoat. Dark clouds filled the sky.” What will probably happen?', choices: ['It will rain', 'It will snow indoors', 'The sun will disappear forever'], answer: 'It will rain', hint: 'Use the clothing and clouds as clues.', explanation: 'The raincoat and dark clouds support the inference that rain is coming.' },
-    ],
-  },
-  '11–13': {
-    science: [
-      { subject: 'science', activity: 'Cell Scanner', token: 'DNA', prompt: 'Which cell structure contains most of a eukaryotic cell’s DNA?', choices: ['Nucleus', 'Cell membrane', 'Cytoplasm'], answer: 'Nucleus', hint: 'It acts like the cell’s information centre.', explanation: 'In eukaryotic cells, most genetic material is stored in the nucleus.' },
-      { subject: 'science', activity: 'Energy Lab', token: '→', prompt: 'A solar panel changes light energy mainly into which form?', choices: ['Electrical energy', 'Sound energy', 'Nuclear energy'], answer: 'Electrical energy', hint: 'It can power lights and devices.', explanation: 'Photovoltaic cells convert light energy into electrical energy.' },
-      { subject: 'science', activity: 'Atom Forge', token: 'p⁺', prompt: 'Which particle has a positive electric charge?', choices: ['Proton', 'Electron', 'Neutron'], answer: 'Proton', hint: 'Electrons are negative and neutrons are neutral.', explanation: 'Protons have positive charge, electrons negative charge, and neutrons no charge.' },
-    ],
-    math: [
-      { subject: 'math', activity: 'Equation Gate', token: '3x=21', prompt: 'Solve 3x = 21. What is x?', choices: ['7', '18', '63'], answer: '7', hint: 'Divide both sides by 3.', explanation: '21 ÷ 3 = 7, so x = 7.' },
-      { subject: 'math', activity: 'Ratio Reactor', token: '2:5', prompt: 'Blue and gold crystals are in a 2:5 ratio. If there are 10 blue crystals, how many are gold?', choices: ['20', '25', '50'], answer: '25', hint: 'The blue amount was multiplied by 5.', explanation: 'Multiplying both parts of 2:5 by 5 gives 10:25.' },
-      { subject: 'math', activity: 'Chance Chamber', token: 'P', prompt: 'A bag has 3 red and 7 blue gems. What is the probability of choosing a red gem?', choices: ['3/10', '7/10', '1/3'], answer: '3/10', hint: 'There are 10 gems altogether and 3 favourable outcomes.', explanation: 'Probability is favourable outcomes over total outcomes, so it is 3/10.' },
-    ],
-    english: [
-      { subject: 'english', activity: 'Inference Trail', token: '⌕', prompt: '“Kai checked the clock twice and drummed his fingers.” What can you reasonably infer?', choices: ['Kai is impatient', 'Kai is asleep', 'Kai cannot see the clock'], answer: 'Kai is impatient', hint: 'Look at the repeated checking and restless movement.', explanation: 'Those details suggest Kai is waiting and becoming impatient.' },
-      { subject: 'english', activity: 'Figurative Forge', token: '☁', prompt: 'Which sentence uses personification?', choices: ['The wind whispered through the pines.', 'The wind was cold.', 'The wind moved at 20 km/h.'], answer: 'The wind whispered through the pines.', hint: 'Personification gives a nonhuman thing a human action.', explanation: 'Whispering is a human action given to the wind.' },
-      { subject: 'english', activity: 'Clause Builder', token: '+', prompt: 'Which group of words is an independent clause?', choices: ['The explorers reached camp.', 'Because the storm ended', 'While crossing the bridge'], answer: 'The explorers reached camp.', hint: 'It must express a complete thought on its own.', explanation: '“The explorers reached camp” has a subject, verb, and complete meaning.' },
-    ],
-  },
-};
-
-const questVariants: Record<string, QuestVariant[]> = {
-  science: [
-    { id: 'habitat-rescue', title: 'Habitat Rescue', activity: 'Animal sorting expedition', intro: 'A windstorm mixed up the jungle trail signs. Use science clues to guide every creature home.' },
-    { id: 'plant-power', title: 'Plant Power Lab', activity: 'Living-world investigation', intro: 'The glow-vines are fading. Observe plants, energy, and ecosystems to help them shine again.' },
-    { id: 'body-detective', title: 'Body Detective', activity: 'Life-science mystery', intro: 'Professor Pip found a book of missing body clues. Solve the mystery one discovery at a time.' },
-    { id: 'space-signal', title: 'Signal from the Stars', activity: 'Space and physics mission', intro: 'A friendly satellite is sending scrambled science signals. Decode them before it passes overhead.' },
-  ],
-  math: [
-    { id: 'pattern-bridge', title: 'The Pattern Bridge', activity: 'Number-pattern crossing', intro: 'The royal bridge changes with every step. Continue its patterns to make a safe path.' },
-    { id: 'dragon-delivery', title: 'Dragon Berry Delivery', activity: 'Story problem adventure', intro: 'Hungry hatchlings are waiting. Count and calculate the perfect number of glow-berries.' },
-    { id: 'shape-castle', title: 'Castle of Shapes', activity: 'Geometry building challenge', intro: 'The castle towers lost their blueprints. Use shape and measurement clues to rebuild them.' },
-    { id: 'skyship-repair', title: 'Royal Skyship Repair', activity: 'Arithmetic repair mission', intro: 'The royal skyship needs number power. Solve each problem to charge another engine cell.' },
-  ],
-  english: [
-    { id: 'spelling-sprint', title: 'The Spelling Sprint', activity: 'Word-catching quest', intro: 'Runaway letters are hiding among the trees. Catch the right words and return them to the library.' },
-    { id: 'sentence-repair', title: 'Sentence Repair Shop', activity: 'Grammar fixing mission', intro: 'A word storm jumbled the forest signs. Repair each sentence so travellers can find their way.' },
-    { id: 'story-clues', title: 'The Story Clue Trail', activity: 'Reading mystery', intro: 'Willa left clues inside tiny tales. Read closely and uncover the path to the secret ending.' },
-    { id: 'vocabulary-garden', title: 'Vocabulary Garden', activity: 'Meaning and word-choice quest', intro: 'The word-flowers bloom when the strongest word is chosen. Help the whole garden grow.' },
-  ],
-  puzzle: [
-    { id: 'yeti-logic', title: 'Yeti Yara’s Logic Trail', activity: 'Mixed-subject logic quest', intro: 'Yara marked a safe trail with science, number, and word clues. Follow them to the summit.' },
-    { id: 'crystal-sequence', title: 'Crystal Sequence', activity: 'Pattern and clue hunt', intro: 'Mountain crystals are flashing in a secret order. Combine every explorer skill to decode them.' },
-    { id: 'mystery-doors', title: 'The Three Mystery Doors', activity: 'Choice and deduction challenge', intro: 'Each door asks a different kind of question. Solve all three to open the peak observatory.' },
-    { id: 'summit-mix', title: 'Summit Skill Mix', activity: 'Mixed-subject boss challenge', intro: 'A playful snowstorm mixed every lesson together. Sort out the clues and calm the mountain.' },
-  ],
-  inventor: [
-    { id: 'blueprint-builder', title: 'Blueprint Builder', activity: 'Creative STEM planning', intro: 'Tinker Tavi has an idea but the blueprint is incomplete. Add the right science, number, and word clues.' },
-    { id: 'prototype-test', title: 'Prototype Test Run', activity: 'Test-and-improve mission', intro: 'A new island machine almost works. Investigate each problem and improve the design.' },
-    { id: 'energy-machine', title: 'The Clean Energy Machine', activity: 'Energy and calculation quest', intro: 'Power the workshop with a smart new machine by solving its mixed STEM controls.' },
-    { id: 'invention-fair', title: 'Island Invention Fair', activity: 'Mixed-subject showcase', intro: 'The invention fair opens soon. Complete every challenge to prepare Tavi’s surprising creation.' },
-  ],
-};
-
 const defaultProfile: Profile = {
   age: null, nickname: 'Nova', skin: 1, hair: 0, outfit: 0, explorerClass: 'Scientist', companion: 'Fox',
   xp: 0, stars: 0, badges: [], facts: [], items: [], completed: [],
   progress: { science: { correct: 0, attempts: 0 }, math: { correct: 0, attempts: 0 }, english: { correct: 0, attempts: 0 } },
   sound: true, narration: false, narrationAuto: false, speechRate: 0.9, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
   worldPosition: { x: 48, y: 20 },
-  questHistory: {}, questionHistory: {},
+  questHistory: {}, questionHistory: {}, factHistory: {},
 };
 
 const nicknames = ['Nova', 'Sunny Star', 'Clever Fox', 'Mighty Maple'];
@@ -254,12 +75,13 @@ function shuffled<T>(items: T[]) {
   return copy;
 }
 
-function questionKey(question: Question) { return `${question.subject}:${question.prompt}`; }
-
-function poolForRegion(age: AgeGroup, regionId: string) {
-  const subject = regions.find((region) => region.id === regionId)?.subject;
-  if (subject && subject !== 'mixed') return [...questions[age][subject], ...extraQuestions[age][subject]];
-  return (['science', 'math', 'english'] as Subject[]).flatMap((item) => [...questions[age][item], ...extraQuestions[age][item]]);
+function activityNarration(activity?: Activity) {
+  if (!activity) return '';
+  if (activity.activityType === 'multiple-choice') return `${activity.prompt} Choose from ${activity.choices.join(', ')}.`;
+  if (activity.activityType === 'true-false') return `${activity.prompt} Choose true or false.`;
+  if (activity.activityType === 'ordering') return `${activity.prompt} Put these items in order using the move up and move down buttons: ${activity.items.join(', ')}.`;
+  if (activity.activityType === 'matching') return `${activity.prompt} Match each item on the left with one choice on the right. Left items: ${activity.pairs.map((pair) => pair.left).join(', ')}. Choices: ${activity.pairs.map((pair) => pair.right).join(', ')}.`;
+  return `${activity.prompt} Enter a number${activity.suffix ? ` in ${activity.suffix.trim()}` : ''}.`;
 }
 
 function Avatar({ profile, small = false }: { profile: Profile; small?: boolean }) {
@@ -280,10 +102,11 @@ export default function Home() {
   const [screen, setScreen] = useState<Screen>('welcome');
   const [hydrated, setHydrated] = useState(false);
   const [selectedAge, setSelectedAge] = useState<AgeGroup | null>(null);
-  const [activeRegionId, setActiveRegionId] = useState('science');
+  const [activeRegionId, setActiveRegionId] = useState<RegionId>('science');
   const [activeQuest, setActiveQuest] = useState<QuestVariant>(questVariants.science[0]);
-  const [questQuestions, setQuestQuestions] = useState<Question[]>([]);
+  const [questQuestions, setQuestQuestions] = useState<Activity[]>([]);
   const [factOpen, setFactOpen] = useState(false);
+  const [activeFact, setActiveFact] = useState<WonderFact | null>(null);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [correctAnswer, setCorrectAnswer] = useState(false);
@@ -299,6 +122,11 @@ export default function Home() {
   const [spokenWordIndex, setSpokenWordIndex] = useState(0);
   const [heroFacing, setHeroFacing] = useState<'left' | 'right'>('right');
   const [heroJumping, setHeroJumping] = useState(false);
+  const [orderItems, setOrderItems] = useState<string[]>([]);
+  const [matchingAnswers, setMatchingAnswers] = useState<Record<string, string>>({});
+  const [matchingOptions, setMatchingOptions] = useState<string[]>([]);
+  const [activeMatchLeft, setActiveMatchLeft] = useState<string | null>(null);
+  const [numericAnswer, setNumericAnswer] = useState('');
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -322,7 +150,7 @@ export default function Home() {
 
   const level = levelFromXp(profile.xp);
   const activeRegion = regions.find((region) => region.id === activeRegionId) ?? regions[0];
-  const currentQuestions = questQuestions.length ? questQuestions : poolForRegion(profile.age ?? '8–10', activeRegionId).slice(0, 3);
+  const currentQuestions = questQuestions;
   const currentQuestion = currentQuestions[questionIndex];
   const nearbyRegion = useMemo(() => regions.find((region) => {
     const dx = region.position.x - profile.worldPosition.x;
@@ -373,7 +201,7 @@ export default function Home() {
     if (screen === 'intro') return `Explorer ${profile.nickname}! The Compass of Curiosity is glowing. Five realms need your questions, ideas, and courage.`;
     if (screen === 'map') return `World Explorer. Move ${profile.nickname} with the arrow keys, W A S D, or the big direction buttons. Walk close to a realm, then choose enter realm. ${regions.map((region) => `${region.name}, level ${region.level}.`).join(' ')}`;
     if (screen === 'region') return `Welcome to ${activeRegion.name}. Your new quest is ${activeQuest.title}. ${activeQuest.intro}`;
-    if (screen === 'game' && currentQuestion) return `${currentQuestion.prompt} Your choices are ${currentQuestion.choices.join(', ')}.`;
+    if (screen === 'game' && currentQuestion) return activityNarration(currentQuestion);
     if (screen === 'rewards') return `Quest complete! Your curiosity lit the way. You earned ${reward.stars} stars and ${reward.xp} explorer points.`;
     if (screen === 'backpack') return `Explorer backpack. You have ${profile.facts.length} wonder facts, ${profile.items.length} quest treasures, and ${profile.badges.length} badges.`;
     if (screen === 'progress') return `${profile.nickname}'s progress. Level ${level}. ${profile.xp} explorer points and ${profile.stars} stars.`;
@@ -403,44 +231,21 @@ export default function Home() {
     updateProfile({ nickname: clean }); setCustomNickname(clean); setNicknameError('');
   };
 
-  const prepareQuest = useCallback((id: string) => {
+  const prepareQuest = useCallback((id: RegionId) => {
     const age = profile.age ?? '8–10';
-    const variants = questVariants[id] ?? questVariants.science;
-    const usedQuestIds = profile.questHistory[id] ?? [];
-    let availableVariants = variants.filter((variant) => !usedQuestIds.includes(variant.id));
-    const questCycleComplete = availableVariants.length === 0;
-    if (questCycleComplete) {
-      const lastQuestId = usedQuestIds.at(-1);
-      availableVariants = variants.filter((variant) => variant.id !== lastQuestId);
-    }
-    const nextQuest = shuffled(availableVariants)[0] ?? variants[0];
-
-    const fullPool = poolForRegion(age, id);
-    const usedQuestionIds = profile.questionHistory[id] ?? [];
-    const previousQuestionIds = usedQuestionIds.slice(-3);
-    const unusedQuestions = fullPool.filter((question) => !usedQuestionIds.includes(questionKey(question)));
-    const questionCycleComplete = unusedQuestions.length < 3;
-    const eligibleQuestions = questionCycleComplete
-      ? fullPool.filter((question) => !previousQuestionIds.includes(questionKey(question)))
-      : unusedQuestions;
-    const region = regions.find((item) => item.id === id);
-    const nextQuestions = region?.subject === 'mixed'
-      ? (['science', 'math', 'english'] as Subject[]).map((subject) => shuffled(eligibleQuestions.filter((question) => question.subject === subject))[0]).filter((question): question is Question => Boolean(question))
-      : shuffled(eligibleQuestions).slice(0, 3);
-    const finalQuestions = nextQuestions.length === 3 ? shuffled(nextQuestions) : shuffled(fullPool).slice(0, 3);
-    const selectedQuestionIds = finalQuestions.map(questionKey);
-
-    setActiveQuest(nextQuest);
-    setQuestQuestions(finalQuestions);
+    const questSelection = selectQuestVariant(id, profile.questHistory[id] ?? []);
+    const activitySelection = selectQuestActivities(age, id, profile.questionHistory[id] ?? []);
+    setActiveQuest(questSelection.quest);
+    setQuestQuestions(activitySelection.activities);
     setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0);
     setProfile((current) => ({
       ...current,
-      questHistory: { ...current.questHistory, [id]: questCycleComplete ? [nextQuest.id] : [...usedQuestIds, nextQuest.id] },
-      questionHistory: { ...current.questionHistory, [id]: questionCycleComplete ? selectedQuestionIds : [...usedQuestionIds, ...selectedQuestionIds] },
+      questHistory: { ...current.questHistory, [id]: questSelection.history },
+      questionHistory: { ...current.questionHistory, [id]: activitySelection.history },
     }));
   }, [profile.age, profile.questionHistory, profile.questHistory]);
 
-  const enterRegion = useCallback((id: string) => {
+  const enterRegion = useCallback((id: RegionId) => {
     const region = regions.find((item) => item.id === id);
     if (!region || region.level > level) return;
     stopSpeech();
@@ -493,9 +298,23 @@ export default function Home() {
   }, [enterRegion, jumpHero, level, moveHero, nearbyRegion, profile.age, screen]);
 
   const discoverFact = () => {
-    const fact = facts[profile.age ?? '8–10'][activeRegion.id];
-    if (!profile.facts.includes(fact)) updateProfile({ facts: [...profile.facts, fact] });
-    setFactOpen(true); playTone(); speak(fact);
+    const age = profile.age ?? '8–10';
+    const pool = factsFor(age, activeRegion.id);
+    const historyKey = `${age}:${activeRegion.id}`;
+    const validIds = new Set(pool.map((fact) => fact.id));
+    const validHistory = (profile.factHistory[historyKey] ?? []).filter((id) => validIds.has(id));
+    let available = pool.filter((fact) => !validHistory.includes(fact.id));
+    const newCycle = available.length === 0;
+    if (newCycle) available = pool.filter((fact) => fact.id !== validHistory.at(-1));
+    const fact = shuffled(available)[0] ?? pool[0];
+    if (!fact) return;
+    setActiveFact(fact);
+    setProfile((current) => ({
+      ...current,
+      facts: current.facts.includes(fact.text) ? current.facts : [...current.facts, fact.text],
+      factHistory: { ...current.factHistory, [historyKey]: newCycle ? [fact.id] : [...validHistory, fact.id] },
+    }));
+    setFactOpen(true); playTone(); speak(fact.text);
   };
 
   const collectSecret = () => {
@@ -504,15 +323,26 @@ export default function Home() {
     updateProfile({ items: [...profile.items, item], stars: profile.stars + 1 }); playTone();
   };
 
+  const resetActivityInteraction = (activity?: Activity) => {
+    setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setMatchingAnswers({}); setActiveMatchLeft(null); setNumericAnswer('');
+    if (activity?.activityType === 'ordering') {
+      let nextOrder = shuffled(activity.items);
+      if (nextOrder.join('|') === activity.correctOrder.join('|')) nextOrder = [...nextOrder.slice(1), nextOrder[0]];
+      setOrderItems(nextOrder);
+    } else setOrderItems([]);
+    setMatchingOptions(activity?.activityType === 'matching' ? shuffled(activity.pairs.map((pair) => pair.right)) : []);
+  };
+
   const startGame = () => {
-    setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0); setScreen('game');
-    speak(currentQuestions[0].prompt);
+    if (!currentQuestions.length) return;
+    setQuestionIndex(0); resetActivityInteraction(currentQuestions[0]); setScore(0); setScreen('game');
+    speak(activityNarration(currentQuestions[0]));
   };
 
   const restartQuest = () => {
     stopSpeech();
-    setQuestionIndex(0); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); setScore(0);
-    speak(`Restarting ${activeQuest.title}. ${currentQuestions[0].prompt}`);
+    setQuestionIndex(0); resetActivityInteraction(currentQuestions[0]); setScore(0);
+    speak(`Restarting ${activeQuest.title}. ${activityNarration(currentQuestions[0])}`);
   };
 
   const chooseNewQuest = () => {
@@ -522,15 +352,47 @@ export default function Home() {
     setScreen('region');
   };
 
-  const answerQuestion = (choice: string) => {
+  const completeAttempt = (isCorrect: boolean, answerLabel: string) => {
     if (correctAnswer) return;
-    setSelectedAnswer(choice);
-    const isCorrect = choice === currentQuestion.answer;
+    setSelectedAnswer(answerLabel);
     const subject = currentQuestion.subject;
-    const subjectProgress = profile.progress[subject];
-    updateProfile({ progress: { ...profile.progress, [subject]: { attempts: subjectProgress.attempts + 1, correct: subjectProgress.correct + (isCorrect ? 1 : 0) } } });
+    setProfile((current) => {
+      const subjectProgress = current.progress[subject];
+      return { ...current, progress: { ...current.progress, [subject]: { attempts: subjectProgress.attempts + 1, correct: subjectProgress.correct + (isCorrect ? 1 : 0) } } };
+    });
     if (isCorrect) { setCorrectAnswer(true); setScore((value) => value + 1); playTone(); speak(`Correct! ${currentQuestion.explanation}`); }
-    else { playTone(false); }
+    else { playTone(false); speak(`Good thinking. Try once more. ${currentQuestion.hint}`); }
+  };
+
+  const answerChoice = (choice: string | boolean) => {
+    if (currentQuestion.activityType === 'multiple-choice' || currentQuestion.activityType === 'true-false') completeAttempt(isActivityCorrect(currentQuestion, choice), String(choice));
+  };
+
+  const moveOrderItem = (index: number, direction: -1 | 1) => {
+    const destination = index + direction;
+    if (destination < 0 || destination >= orderItems.length) return;
+    setOrderItems((current) => {
+      const next = [...current];
+      [next[index], next[destination]] = [next[destination], next[index]];
+      return next;
+    });
+    setSelectedAnswer(null);
+  };
+
+  const chooseMatch = (right: string) => {
+    if (!activeMatchLeft || correctAnswer) return;
+    setMatchingAnswers((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([, value]) => value !== right));
+      next[activeMatchLeft] = right;
+      return next;
+    });
+    setActiveMatchLeft(null); setSelectedAnswer(null);
+  };
+
+  const submitStructuredAnswer = () => {
+    if (currentQuestion.activityType === 'ordering') completeAttempt(isActivityCorrect(currentQuestion, orderItems), 'ordered');
+    if (currentQuestion.activityType === 'matching') completeAttempt(isActivityCorrect(currentQuestion, matchingAnswers), 'matched');
+    if (currentQuestion.activityType === 'numeric') completeAttempt(isActivityCorrect(currentQuestion, numericAnswer), numericAnswer);
   };
 
   const finishGame = () => {
@@ -545,7 +407,7 @@ export default function Home() {
 
   const nextQuestion = () => {
     if (questionIndex === currentQuestions.length - 1) { finishGame(); return; }
-    const next = questionIndex + 1; setQuestionIndex(next); setSelectedAnswer(null); setCorrectAnswer(false); setShowHint(false); speak(currentQuestions[next].prompt);
+    const next = questionIndex + 1; setQuestionIndex(next); resetActivityInteraction(currentQuestions[next]); speak(activityNarration(currentQuestions[next]));
   };
 
   const resetAdventure = () => {
@@ -664,7 +526,7 @@ export default function Home() {
             <div className="region-guide"><span>{activeRegion.guideIcon}</span></div>
             <div className="dialogue-card"><div className="dialogue-name">{activeRegion.guide}</div><span className="quest-type">{activeQuest.activity}</span><h2>{activeQuest.title}</h2><p>{activeQuest.intro}</p><small className="fresh-quest-note">✦ Fresh activities chosen for this visit</small><ReadButton label="Read this quest aloud" onRead={() => speak(screenNarration, true)} /><div className="dialogue-actions"><button className="secondary-action" onClick={discoverFact}>✦ Hear a fact</button><button className="primary-action" onClick={startGame}>Start the quest <span>→</span></button></div></div>
           </div>
-          {factOpen && <div className="fact-popover" role="dialog" aria-label="Discovered fact"><button onClick={() => setFactOpen(false)} aria-label="Close fact">×</button><span className="fact-icon">✦</span><small>New fact in your backpack</small><strong>{facts[profile.age ?? '8–10'][activeRegion.id]}</strong><ReadButton label="Read fact aloud" onRead={() => speak(facts[profile.age ?? '8–10'][activeRegion.id], true)} /></div>}
+          {factOpen && activeFact && <div className="fact-popover" role="dialog" aria-label="Discovered fact"><button onClick={() => setFactOpen(false)} aria-label="Close fact">×</button><span className="fact-icon">✦</span><small>Wonder Fact · saved in your backpack</small><strong>{activeFact.text}</strong><ReadButton label="Read fact aloud" onRead={() => speak(activeFact.text, true)} /></div>}
         </section>
       )}
 
@@ -680,14 +542,11 @@ export default function Home() {
             </aside>
             <div className="question-card">
               <span className="question-kicker">{activeRegion.name} · {activeQuest.title} · Challenge {questionIndex + 1}</span><div className="question-with-audio"><h2>{currentQuestion.prompt}</h2><ReadButton label="Read question and answers aloud" onRead={() => speak(screenNarration, true)} /></div>
-              <div className="answer-grid">{currentQuestion.choices.map((choice, index) => {
-                const isRight = correctAnswer && choice === currentQuestion.answer; const isWrong = selectedAnswer === choice && choice !== currentQuestion.answer;
-                return <div className="answer-row" key={choice}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correctAnswer || isWrong} onClick={() => answerQuestion(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read answer ${choice} aloud`} onRead={() => speak(choice, true)} /></div>;
-              })}</div>
+              <ActivityResponse activity={currentQuestion} correct={correctAnswer} selectedAnswer={selectedAnswer} orderItems={orderItems} matchingAnswers={matchingAnswers} matchingOptions={matchingOptions} activeMatchLeft={activeMatchLeft} numericAnswer={numericAnswer} onChoice={answerChoice} onMoveOrder={moveOrderItem} onSelectMatchLeft={(value) => { setActiveMatchLeft(value); setSelectedAnswer(null); }} onChooseMatch={chooseMatch} onNumericChange={(value) => { setNumericAnswer(value); setSelectedAnswer(null); }} onSubmit={submitStructuredAnswer} onRead={(text) => speak(text, true)} />
               {!correctAnswer && !selectedAnswer && <button className="hint-button" onClick={() => setShowHint(true)}>◇ Need a hint?</button>}
-              {showHint && !correctAnswer && <div className="hint-panel"><strong>Try this:</strong> {currentQuestion.hint}</div>}
+              {showHint && !correctAnswer && <div className="hint-panel"><strong>Try this:</strong> {currentQuestion.hint}<ReadButton label="Read hint aloud" onRead={() => speak(currentQuestion.hint, true)} /></div>}
               {selectedAnswer && !correctAnswer && <div className="feedback-panel try-again"><strong>Good thinking—let’s look once more.</strong><span>{currentQuestion.hint}</span></div>}
-              {correctAnswer && <div className="feedback-panel correct"><div><strong>Brilliant discovery!</strong><span>{currentQuestion.explanation}</span></div><button onClick={nextQuestion}>{questionIndex === currentQuestions.length - 1 ? 'See rewards' : 'Next challenge'} →</button></div>}
+              {correctAnswer && <div className="feedback-panel correct"><div><strong>Brilliant discovery!</strong><span>{currentQuestion.explanation}</span><ReadButton label="Read explanation aloud" onRead={() => speak(currentQuestion.explanation, true)} /></div><button onClick={nextQuestion}>{questionIndex === currentQuestions.length - 1 ? 'See rewards' : 'Next challenge'} →</button></div>}
             </div>
           </div>
         </section>
@@ -712,11 +571,46 @@ export default function Home() {
       )}
 
       {screen === 'parent' && (
-        <section className="content-screen parent-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Grown-up corner</span><h2>Learning overview</h2><p>A simple, private view of this explorer’s activity.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div>{!parentUnlocked ? <div className="parent-gate"><span className="gate-icon">7 + 5</span><h3>Quick grown-up check</h3><p>What is seven plus five?</p><div><input inputMode="numeric" value={parentAnswer} onChange={(event) => setParentAnswer(event.target.value)} aria-label="Answer to grown-up check" /><button className="primary-action" onClick={() => { if (parentAnswer.trim() === '12') setParentUnlocked(true); }}>Unlock</button></div><small>This keeps little explorers inside the game.</small></div> : <div className="parent-dashboard"><div className="parent-summary"><div><span>{profile.playMinutes}</span><small>Approx. play minutes</small></div><div><span>{profile.completed.length}</span><small>Quests played</small></div><div><span>{profile.facts.length}</span><small>Facts collected</small></div></div><article className="parent-report"><h3>Concepts practiced</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(profile.progress[subject].correct, profile.progress[subject].attempts)}</span><small>{profile.progress[subject].attempts} challenge attempts</small></div>)}</article><article className="next-adventure"><span>✦</span><div><h3>Suggested next adventure</h3><p>{profile.progress.science.attempts <= profile.progress.math.attempts ? 'Visit Science Jungle to practice observing habitats and living things.' : 'Return to Number Kingdom for a fresh pattern and problem-solving quest.'}</p></div></article><div className="parent-actions"><button className="secondary-action" onClick={() => setScreen('settings')}>Accessibility settings</button><button className="danger-link" onClick={resetAdventure}>Reset local adventure</button></div></div>}</section>
+        <section className="content-screen parent-screen"><div className="content-heading"><div><span className="eyebrow"><span>✦</span> Grown-up corner</span><h2>Learning overview</h2><p>A simple, private view of this explorer’s activity.</p></div><button className="secondary-action" onClick={() => setScreen(profile.age ? 'map' : 'welcome')}>← Back</button></div>{!parentUnlocked ? <div className="parent-gate"><span className="gate-icon">7 + 5</span><h3>Quick grown-up check</h3><p>What is seven plus five?</p><div><input inputMode="numeric" value={parentAnswer} onChange={(event) => setParentAnswer(event.target.value)} aria-label="Answer to grown-up check" /><button className="primary-action" onClick={() => { if (parentAnswer.trim() === '12') setParentUnlocked(true); }}>Unlock</button></div><small>This keeps little explorers inside the game.</small></div> : <div className="parent-dashboard"><div className="parent-summary"><div><span>{profile.playMinutes}</span><small>Approx. play minutes</small></div><div><span>{profile.completed.length}</span><small>Quests played</small></div><div><span>{profile.facts.length}</span><small>Facts collected</small></div></div><article className="parent-report"><h3>Concepts practiced</h3>{(['science', 'math', 'english'] as Subject[]).map((subject) => <div key={subject}><strong>{subject[0].toUpperCase() + subject.slice(1)}</strong><span>{mastery(profile.progress[subject].correct, profile.progress[subject].attempts)}</span><small>{profile.progress[subject].attempts} challenge attempts</small></div>)}</article><article className="next-adventure"><span>✦</span><div><h3>Suggested next adventure</h3><p>{profile.progress.science.attempts <= profile.progress.math.attempts ? 'Visit Science Jungle to practice observing habitats and living things.' : 'Return to Number Kingdom for a fresh pattern and problem-solving quest.'}</p></div></article><article className="learning-resources"><h3>Learning resources</h3><p>These independent educational organizations informed K World’s curriculum coverage and age progression. All K World questions, passages, hints, and stories are original; no third-party lessons or assets are reproduced, and no affiliation or endorsement is implied.</p><div>{learningResources.map((resource) => <a key={resource.name} href={resource.url} target="_blank" rel="noreferrer">{resource.name}<span aria-hidden="true">↗</span></a>)}</div></article><div className="parent-actions"><button className="secondary-action" onClick={() => setScreen('settings')}>Accessibility settings</button><button className="danger-link" onClick={resetAdventure}>Reset local adventure</button></div></div>}</section>
       )}
       <ReadAloudDock text={screenNarration} spokenText={spokenText} spokenWordIndex={spokenWordIndex} state={speechState} enabled={profile.narration} onRead={() => speak(screenNarration, true)} onToggle={toggleSpeech} onStop={stopSpeech} />
     </main>
   );
+}
+
+function ActivityResponse({ activity, correct, selectedAnswer, orderItems, matchingAnswers, matchingOptions, activeMatchLeft, numericAnswer, onChoice, onMoveOrder, onSelectMatchLeft, onChooseMatch, onNumericChange, onSubmit, onRead }: {
+  activity: Activity;
+  correct: boolean;
+  selectedAnswer: string | null;
+  orderItems: string[];
+  matchingAnswers: Record<string, string>;
+  matchingOptions: string[];
+  activeMatchLeft: string | null;
+  numericAnswer: string;
+  onChoice: (choice: string | boolean) => void;
+  onMoveOrder: (index: number, direction: -1 | 1) => void;
+  onSelectMatchLeft: (value: string) => void;
+  onChooseMatch: (value: string) => void;
+  onNumericChange: (value: string) => void;
+  onSubmit: () => void;
+  onRead: (text: string) => void;
+}) {
+  const choiceOptions = useMemo(() => activity.activityType === 'multiple-choice' ? shuffled(activity.choices) : [], [activity]);
+  if (activity.activityType === 'multiple-choice') return <div className="answer-grid">{choiceOptions.map((choice, index) => {
+    const isRight = correct && choice === activity.answer; const isWrong = selectedAnswer === choice && choice !== activity.answer;
+    return <div className="answer-row" key={choice}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correct} onClick={() => onChoice(choice)}><span>{String.fromCharCode(65 + index)}</span>{choice}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read answer ${choice} aloud`} onRead={() => onRead(choice)} /></div>;
+  })}</div>;
+
+  if (activity.activityType === 'true-false') return <div className="answer-grid true-false-grid">{[true, false].map((choice, index) => {
+    const label = choice ? 'True' : 'False'; const isRight = correct && choice === activity.answer; const isWrong = selectedAnswer === String(choice) && choice !== activity.answer;
+    return <div className="answer-row" key={label}><button className={`${isRight ? 'right' : ''} ${isWrong ? 'wrong' : ''}`} disabled={correct} onClick={() => onChoice(choice)}><span>{index ? 'F' : 'T'}</span>{label}<i>{isRight ? '✓' : isWrong ? '×' : ''}</i></button><ReadButton label={`Read ${label} aloud`} onRead={() => onRead(label)} /></div>;
+  })}</div>;
+
+  if (activity.activityType === 'ordering') return <div className="structured-activity"><p className="activity-instruction">Move each card until the order feels right.</p><ol className="order-list">{orderItems.map((item, index) => <li key={item}><span>{index + 1}</span><strong>{item}</strong><div><button onClick={() => onMoveOrder(index, -1)} disabled={correct || index === 0} aria-label={`Move ${item} up`}>↑</button><button onClick={() => onMoveOrder(index, 1)} disabled={correct || index === orderItems.length - 1} aria-label={`Move ${item} down`}>↓</button><ReadButton label={`Read ${item} aloud`} onRead={() => onRead(item)} /></div></li>)}</ol><button className="submit-activity" onClick={onSubmit} disabled={correct}>Check my order</button></div>;
+
+  if (activity.activityType === 'matching') return <div className="structured-activity"><p className="activity-instruction">Choose a card on the left, then choose its match on the right.</p><div className="matching-board"><div>{activity.pairs.map((pair) => <button key={pair.left} className={activeMatchLeft === pair.left ? 'active' : matchingAnswers[pair.left] ? 'paired' : ''} onClick={() => onSelectMatchLeft(pair.left)} disabled={correct}><strong>{pair.left}</strong><small>{matchingAnswers[pair.left] ? `Matched with: ${matchingAnswers[pair.left]}` : 'Choose this card'}</small></button>)}</div><div>{matchingOptions.map((option) => <button key={option} className={Object.values(matchingAnswers).includes(option) ? 'paired' : ''} onClick={() => onChooseMatch(option)} disabled={correct || !activeMatchLeft}><strong>{option}</strong><small>{Object.values(matchingAnswers).includes(option) ? 'Matched' : activeMatchLeft ? `Match with ${activeMatchLeft}` : 'Choose a left card first'}</small></button>)}</div></div><div className="matching-actions"><ReadButton label="Read all matching choices aloud" onRead={() => onRead(activityNarration(activity))} /><button className="submit-activity" onClick={onSubmit} disabled={correct || Object.keys(matchingAnswers).length !== activity.pairs.length}>Check my matches</button></div></div>;
+
+  return <form className="structured-activity numeric-activity" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><label htmlFor={`numeric-${activity.id}`}>Your number</label><div><input id={`numeric-${activity.id}`} type="number" step="any" inputMode="decimal" value={numericAnswer} onChange={(event) => onNumericChange(event.target.value)} disabled={correct} aria-describedby={`numeric-help-${activity.id}`} /><span>{activity.suffix}</span><ReadButton label="Read numeric instructions aloud" onRead={() => onRead(activityNarration(activity))} /></div><small id={`numeric-help-${activity.id}`}>Numbers only. Decimals such as 2.5 are welcome.</small><button className="submit-activity" type="submit" disabled={correct || numericAnswer.trim() === ''}>Check my number</button></form>;
 }
 
 function GameHeader({ profile, level, screen, onNavigate, onSound }: { profile: Profile; level: number; screen: Screen; onNavigate: (screen: Screen) => void; onSound: () => void }) {

@@ -21,3 +21,13 @@ Use Node.js 22.13 or later:
 npm install
 npm run dev
 ```
+
+## Content architecture
+
+- `content/question-bank.ts` contains the typed, age-banded activity bank.
+- `content/world.ts` contains regions, quest stories, rotating Wonder Facts, and parent resources.
+- `content/rotation.ts` selects fresh quest content while remaining compatible with older local saves.
+- `content/evaluation.ts` evaluates all five activity formats.
+- `scripts/validate-content.ts` checks counts, IDs, answers, duplicates, format variety, and quest rotation.
+
+Run the content check directly with `npm run validate-content`. It also runs automatically before every production build.

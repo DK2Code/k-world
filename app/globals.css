@@ -352,3 +352,58 @@ h1 em { color: var(--purple); font-weight: inherit; }
 @media (max-width: 760px) {
   .game-topbar { grid-template-columns: 40px 42px 1fr 42px; gap: 6px; }.game-topbar .restart-game { width: 38px; padding: 0; font-size: 17px; }.game-topbar .restart-game span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }.quest-type { margin-top: 5px; }.reward-actions button { width: 100%; }
 }
+
+/* Expanded activity formats */
+.structured-activity { display: grid; gap: 14px; }
+.activity-instruction { margin: 0; color: #686a77; font-size: 11px; font-weight: 800; line-height: 1.55; }
+.submit-activity { justify-self: start; min-height: 45px; border: 0; padding: 11px 18px; color: white; background: var(--purple); border-radius: 13px; box-shadow: 0 4px 0 var(--deep-purple); font-size: 11px; font-weight: 900; cursor: pointer; }
+.submit-activity:hover:not(:disabled) { transform: translateY(-1px); }
+.submit-activity:disabled { opacity: .55; cursor: not-allowed; }
+.order-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.order-list li { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 11px; min-height: 58px; padding: 8px 10px; background: #fff; border: 2px solid rgba(23,32,60,.1); border-radius: 15px; box-shadow: 0 3px 0 rgba(23,32,60,.08); }
+.order-list li > span { display: grid; place-items: center; width: 32px; height: 32px; color: var(--purple); background: #eee9ff; border-radius: 10px; font-weight: 900; }
+.order-list li > strong { font-size: 11px; line-height: 1.35; }
+.order-list li > div { display: flex; align-items: center; gap: 5px; }
+.order-list li > div > button:not(.read-button) { width: 36px; height: 36px; border: 2px solid rgba(109,76,232,.18); color: #5136b7; background: #f2edff; border-radius: 10px; font-size: 16px; font-weight: 900; cursor: pointer; }
+.order-list li > div > button:disabled { opacity: .35; cursor: not-allowed; }
+.order-list .read-button { width: 36px; height: 36px; justify-content: center; margin: 0; padding: 0; border-radius: 10px; }
+.order-list .read-button > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.matching-board { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.matching-board > div { display: grid; align-content: start; gap: 9px; }
+.matching-board button { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; border: 2px solid rgba(23,32,60,.11); padding: 10px 12px; color: var(--ink); background: #fff; border-radius: 14px; box-shadow: 0 3px 0 rgba(23,32,60,.08); text-align: left; cursor: pointer; }
+.matching-board button:hover:not(:disabled),.matching-board button.active { border-color: var(--purple); background: #f2edff; }
+.matching-board button.active { box-shadow: 0 0 0 3px rgba(109,76,232,.16),0 3px 0 rgba(23,32,60,.08); }
+.matching-board button.paired { border-color: #37a77a; background: #eaf8f2; }
+.matching-board button:disabled { cursor: default; }
+.matching-board strong { font-size: 11px; line-height: 1.3; }
+.matching-board small { color: #7b7c87; font-size: 8px; line-height: 1.3; }
+.matching-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.matching-actions .read-button { margin: 0; }
+.numeric-activity { max-width: 430px; }
+.numeric-activity > label { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }
+.numeric-activity > div { display: grid; grid-template-columns: minmax(120px,1fr) auto auto; align-items: center; gap: 9px; }
+.numeric-activity input { width: 100%; min-height: 54px; border: 2px solid rgba(23,32,60,.14); padding: 10px 14px; color: var(--ink); background: #fff; border-radius: 14px; font-family: inherit; font-size: 22px; font-weight: 900; outline: none; }
+.numeric-activity input:focus { border-color: var(--purple); box-shadow: 0 0 0 4px rgba(109,76,232,.13); }
+.numeric-activity > div > span { color: #777986; font-size: 11px; font-weight: 900; }
+.numeric-activity .read-button { width: 45px; height: 45px; justify-content: center; margin: 0; padding: 0; }
+.numeric-activity .read-button > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.numeric-activity > small { color: #7b7c87; font-size: 8px; }
+
+/* Parent-facing source transparency */
+.learning-resources { grid-column: 1/-1; padding: 24px; background: #fff; border: 2px solid rgba(23,32,60,.08); border-radius: 22px; }
+.learning-resources h3 { font-family: Georgia,serif; font-size: 19px; }
+.learning-resources > p { max-width: 780px; margin: 7px 0 17px; color: #6e707c; font-size: 10px; line-height: 1.65; }
+.learning-resources > div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.learning-resources a { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; padding: 9px 12px; color: #47319d; background: #f2edff; border: 1px solid #ddd3ff; border-radius: 11px; font-size: 9px; font-weight: 900; text-decoration: none; }
+.learning-resources a:hover { background: #e8e0ff; text-decoration: underline; }
+.learning-resources a span { font-size: 14px; }
+
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible { outline: 4px solid #ffcb4c; outline-offset: 3px; }
+
+@media (max-width: 760px) {
+  .matching-board { grid-template-columns: 1fr; }.matching-actions { align-items: stretch; flex-direction: column; }.matching-actions .submit-activity { width: 100%; }.order-list li { grid-template-columns: 30px 1fr; }.order-list li > div { grid-column: 1/-1; justify-content: flex-end; }.learning-resources { grid-column: 1; padding: 19px; }.learning-resources > div { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 440px) {
+  .numeric-activity > div { grid-template-columns: 1fr auto; }.numeric-activity .read-button { grid-column: 1/-1; width: 100%; }.numeric-activity .read-button > span:last-child { position: static; width: auto; height: auto; overflow: visible; clip: auto; }.true-false-grid { grid-template-columns: 1fr; }
+}
