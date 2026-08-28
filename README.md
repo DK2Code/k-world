@@ -11,6 +11,8 @@ K World is a static educational RPG for children. Player progress stays in the b
 
 The workflow supports both project sites such as `username.github.io/kworld` and user sites such as `username.github.io`.
 
+This repository also includes the current static export at its root with `.nojekyll` as a compatibility fallback for repositories still configured to deploy from the `main` branch. Selecting **GitHub Actions** remains the preferred Pages setting and avoids competing deployments.
+
 If you use a custom domain, add a repository Actions variable named `NEXT_PUBLIC_SITE_URL` containing the full public origin, for example `https://learn.example.com`.
 
 ## Local development
