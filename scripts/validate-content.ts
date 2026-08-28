@@ -1,6 +1,7 @@
 import { buildAssessmentReport, calculateMastery, createAssessmentSession, getActivity, submitAssessmentAnswer } from '../content/assessment.ts';
 import { correctResponseFor, isActivityCorrect } from '../content/evaluation.ts';
 import { gradeLevels } from '../content/grades.ts';
+import { narrationDelivery, prepareNarrationText, rankNarratorVoices, resolveNarratorVoice, splitNarration } from '../content/narration.ts';
 import { migrateProfile } from '../content/profile.ts';
 import { allActivities, questionBank } from '../content/question-bank.ts';
 import { selectQuestActivities, selectQuestVariant } from '../content/rotation.ts';
@@ -119,6 +120,22 @@ const legacy = migrateProfile({ age: '8–10', nickname: 'Legacy Nova', xp: 145,
 if (legacy.grade !== null || legacy.legacyAgeGroup !== '8–10' || legacy.nickname !== 'Legacy Nova' || legacy.xp !== 145 || legacy.stars !== 22 || legacy.sound !== false || legacy.progress.science.correct !== 7 || legacy.questHistory.science[0] !== 'old-question') fail('Legacy-save migration did not preserve progress and settings.');
 if (legacy.saveVersion !== 2 || legacy.assessmentHistory.length !== 0) fail('Legacy-save migration did not add the versioned assessment fields.');
 
+const rankedVoices = rankNarratorVoices([
+  { voiceURI: 'robot', name: 'Robot eSpeak', lang: 'en-US', localService: true, default: true },
+  { voiceURI: 'natural', name: 'Microsoft Aria Online (Natural)', lang: 'en-US', localService: false, default: false },
+  { voiceURI: 'spanish', name: 'Natural Spanish', lang: 'es-MX', localService: true, default: false },
+]);
+if (rankedVoices.length !== 2 || rankedVoices[0].voiceURI !== 'natural' || !rankedVoices[0].recommended) fail('Narrator voice ranking did not prefer the suitable natural English voice.');
+if (resolveNarratorVoice(rankedVoices, 'missing')?.voiceURI !== 'natural' || resolveNarratorVoice([], 'missing') !== undefined) fail('Narrator voice fallback selection failed.');
+const speechFriendly = prepareNarrationText('✦ Solve 8 × 4 = 32. Earn 5 XP.');
+if (!speechFriendly.includes('8 times 4 equals 32') || !speechFriendly.includes('explorer points') || speechFriendly.includes('✦')) fail('Narration text preparation did not translate educational symbols and decorative text.');
+if (splitNarration('First, notice the clues. Next, compare the evidence. Finally, choose the strongest explanation.', 35).length < 2) fail('Narration did not split longer text into natural segments.');
+const earlyDelivery = narrationDelivery('K', .9, 1);
+const highDelivery = narrationDelivery('12', .9, 1.1);
+if (earlyDelivery.rate >= highDelivery.rate || earlyDelivery.pauseMs <= highDelivery.pauseMs || highDelivery.pitch > 1.01) fail('Grade-aware narrator delivery is not sufficiently distinct or mature.');
+const narrationProfile = migrateProfile({ narratorVoiceURI: 'saved-voice', speechRate: 9, speechPitch: .2 });
+if (narrationProfile.narratorVoiceURI !== 'saved-voice' || narrationProfile.speechRate !== 1.2 || narrationProfile.speechPitch !== .9) fail('Narrator preference migration or safe limits failed.');
+
 if (errors.length) {
   console.error(`Content validation failed with ${errors.length} issue${errors.length === 1 ? '' : 's'}:`);
   for (const error of errors) console.error(`- ${error}`);
@@ -126,5 +143,5 @@ if (errors.length) {
 } else {
   const formats = [...new Set(allActivities.map((activity: GradedActivity) => activity.activityType))].join(', ');
   console.log(`Content validation passed: ${allActivities.length} activities across ${grades.length} grades, ${Object.values(questVariants).flat().length} quests, ${wonderFacts.length} facts.`);
-  console.log(`Assessment, migration, mastery, report, rotation, and answer checks passed. Formats: ${formats}.`);
+  console.log(`Assessment, migration, mastery, narration, report, rotation, and answer checks passed. Formats: ${formats}.`);
 }

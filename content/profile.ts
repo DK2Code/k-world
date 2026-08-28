@@ -21,7 +21,9 @@ export type ProfileData = {
   sound: boolean;
   narration: boolean;
   narrationAuto: boolean;
+  narratorVoiceURI: string;
   speechRate: number;
+  speechPitch: number;
   reducedMotion: boolean;
   largeText: boolean;
   easyRead: boolean;
@@ -40,7 +42,7 @@ export const defaultProfile: ProfileData = {
   saveVersion: 2, grade: null, legacyAgeGroup: null, nickname: 'Nova', skin: 1, hair: 0, outfit: 0, explorerClass: 'Scientist', companion: 'Fox',
   xp: 0, stars: 0, badges: [], facts: [], items: [], completed: [],
   progress: { science: { correct: 0, attempts: 0 }, math: { correct: 0, attempts: 0 }, english: { correct: 0, attempts: 0 } },
-  sound: true, narration: false, narrationAuto: false, speechRate: 0.9, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
+  sound: true, narration: false, narrationAuto: false, narratorVoiceURI: '', speechRate: 0.9, speechPitch: 1, reducedMotion: false, largeText: false, easyRead: false, playMinutes: 0,
   worldPosition: { x: 48, y: 20 }, questHistory: {}, questionHistory: {}, factHistory: {}, practiceAttempts: [], assessmentAttempts: [], assessmentHistory: [], activeAssessment: null,
 };
 
@@ -62,6 +64,9 @@ export function migrateProfile(raw: unknown): ProfileData {
     saveVersion: 2,
     grade,
     legacyAgeGroup: typeof saved.legacyAgeGroup === 'string' ? saved.legacyAgeGroup : typeof saved.age === 'string' ? saved.age : null,
+    narratorVoiceURI: typeof saved.narratorVoiceURI === 'string' ? saved.narratorVoiceURI : '',
+    speechRate: typeof saved.speechRate === 'number' && Number.isFinite(saved.speechRate) ? Math.min(1.2, Math.max(.65, saved.speechRate)) : defaultProfile.speechRate,
+    speechPitch: typeof saved.speechPitch === 'number' && Number.isFinite(saved.speechPitch) ? Math.min(1.1, Math.max(.9, saved.speechPitch)) : defaultProfile.speechPitch,
     progress,
     badges: stringArray(saved.badges), facts: stringArray(saved.facts), items: stringArray(saved.items), completed: stringArray(saved.completed),
     questHistory: history(saved.questHistory), questionHistory: history(saved.questionHistory), factHistory: history(saved.factHistory),

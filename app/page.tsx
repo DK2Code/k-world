@@ -5,10 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { availableSkills, buildAssessmentReport, createAssessmentSession, getActivity, masteryBySkill, practiceAttempt, submitAssessmentAnswer } from '@/content/assessment.ts';
 import { isActivityCorrect } from '@/content/evaluation.ts';
 import { curriculumMap, gradeLabel, gradeLevels, gradeNumber, gradePresentation } from '@/content/grades.ts';
+import { narrationDelivery, rankNarratorVoices, resolveNarratorVoice, splitNarration } from '@/content/narration.ts';
 import { defaultProfile, migrateProfile } from '@/content/profile.ts';
 import { selectQuestActivities, selectQuestVariant } from '@/content/rotation.ts';
 import { factsFor, learningResources, questVariants, regions } from '@/content/world.ts';
 import type { AssessmentKind, AssessmentReport } from '@/content/assessment.ts';
+import type { RankedNarratorVoice } from '@/content/narration.ts';
 import type { ProfileData } from '@/content/profile.ts';
 import type { Activity, GradeLevel, GradedActivity, QuestVariant, RegionId, Subject, WonderFact } from '@/content/types.ts';
 
@@ -16,6 +18,7 @@ type Screen = 'welcome' | 'character' | 'intro' | 'map' | 'region' | 'game' | 'r
 type Profile = ProfileData;
 
 const STORE_KEY = 'kworld-adventure-v1';
+const NARRATOR_PREVIEW = 'Welcome, explorer! Your next K World adventure is waiting. Let’s discover something amazing together.';
 
 const nicknames = ['Nova', 'Sunny Star', 'Clever Fox', 'Mighty Maple'];
 const classes = [
@@ -116,7 +119,15 @@ export default function Home() {
   const [selectedAssessmentSubject, setSelectedAssessmentSubject] = useState<Subject>('math');
   const [selectedAssessmentSkill, setSelectedAssessmentSkill] = useState('');
   const [activeReport, setActiveReport] = useState<AssessmentReport | null>(null);
+  const [narratorVoices, setNarratorVoices] = useState<RankedNarratorVoice[]>([]);
+  const [voiceStatus, setVoiceStatus] = useState<'loading' | 'ready' | 'fallback' | 'unavailable'>('loading');
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nativeVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const speechRunRef = useRef(0);
+  const speechPauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speechNextSegmentRef = useRef<(() => void) | null>(null);
+  const speechPausedRef = useRef(false);
+  const speakRef = useRef<(text: string, force?: boolean) => void>(() => undefined);
 
   useEffect(() => {
     try {
@@ -134,6 +145,31 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+      // Speech remains optional when a browser does not expose the Web Speech API.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setVoiceStatus('unavailable');
+      return;
+    }
+    const loadVoices = () => {
+      const nativeVoices = window.speechSynthesis.getVoices();
+      if (!nativeVoices.length) return false;
+      nativeVoicesRef.current = nativeVoices;
+      const ranked = rankNarratorVoices(nativeVoices.map((voice) => ({ voiceURI: voice.voiceURI, name: voice.name, lang: voice.lang, localService: voice.localService, default: voice.default })));
+      setNarratorVoices(ranked);
+      setVoiceStatus(ranked.length ? 'ready' : 'fallback');
+      return true;
+    };
+    loadVoices();
+    const loadTimeout = setTimeout(() => { if (!loadVoices()) setVoiceStatus('fallback'); }, 900);
+    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    return () => {
+      clearTimeout(loadTimeout);
+      window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+    };
+  }, []);
+
+  useEffect(() => {
     if (hydrated) localStorage.setItem(STORE_KEY, JSON.stringify(profile));
   }, [profile, hydrated]);
 
@@ -148,6 +184,8 @@ export default function Home() {
   const activeReportTrend = useMemo(() => activeReport ? assessmentTrend(activeReport, profile.assessmentHistory) : null, [activeReport, profile.assessmentHistory]);
   const assessmentSkills = useMemo(() => profile.grade ? availableSkills(profile.grade, selectedAssessmentSubject) : [], [profile.grade, selectedAssessmentSubject]);
   const assessmentSkillId = assessmentSkills.some((skill) => skill.id === selectedAssessmentSkill) ? selectedAssessmentSkill : assessmentSkills[0]?.id ?? '';
+  const selectedNarratorVoice = useMemo(() => resolveNarratorVoice(narratorVoices, profile.narratorVoiceURI), [narratorVoices, profile.narratorVoiceURI]);
+  const narratorStyle = narrationDelivery(profile.grade, profile.speechRate, profile.speechPitch);
   const nearbyRegion = useMemo(() => regions.find((region) => {
     const dx = region.position.x - profile.worldPosition.x;
     const dy = region.position.y - profile.worldPosition.y;
@@ -164,31 +202,87 @@ export default function Home() {
       oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .18);
     } catch { /* Sound is optional. */ }
   }, [profile.sound]);
-  const speak = useCallback((text: string, force = false) => {
-    if ((!profile.narration && !force) || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = profile.speechRate;
-    utterance.pitch = 1.08;
-    utterance.onstart = () => { setSpeechState('speaking'); setSpokenText(text); setSpokenWordIndex(0); };
-    utterance.onboundary = (event) => {
-      const before = text.slice(0, event.charIndex).trim();
-      setSpokenWordIndex(before ? before.split(/\s+/).length : 0);
-    };
-    utterance.onend = () => setSpeechState('idle');
-    utterance.onerror = () => setSpeechState('idle');
-    window.speechSynthesis.speak(utterance);
-  }, [profile.narration, profile.speechRate]);
-
   const stopSpeech = useCallback(() => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    speechRunRef.current += 1;
+    speechPausedRef.current = false;
+    speechNextSegmentRef.current = null;
+    if (speechPauseTimerRef.current) clearTimeout(speechPauseTimerRef.current);
+    speechPauseTimerRef.current = null;
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    }
     setSpeechState('idle');
   }, []);
 
+  const speak = useCallback((text: string, force = false) => {
+    if ((!profile.narration && !force) || typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
+    const segments = splitNarration(text);
+    if (!segments.length) return;
+    stopSpeech();
+    const runId = speechRunRef.current;
+    const preparedText = segments.join(' ');
+    const delivery = narrationDelivery(profile.grade, profile.speechRate, profile.speechPitch);
+    const selectedVoiceURI = selectedNarratorVoice?.voiceURI ?? '';
+    const fallbackVoiceURI = narratorVoices[0]?.voiceURI ?? '';
+    let fallbackTried = false;
+    setSpokenText(preparedText);
+    setSpokenWordIndex(0);
+    setSpeechState('speaking');
+
+    const playSegment = (segmentIndex: number, useFallback = false) => {
+      if (speechRunRef.current !== runId || segmentIndex >= segments.length) return;
+      const segment = segments[segmentIndex];
+      const voiceURI = useFallback ? fallbackVoiceURI : selectedVoiceURI;
+      const nativeVoice = nativeVoicesRef.current.find((voice) => voice.voiceURI === voiceURI);
+      const utterance = new SpeechSynthesisUtterance(segment);
+      if (nativeVoice) { utterance.voice = nativeVoice; utterance.lang = nativeVoice.lang; }
+      else utterance.lang = 'en-US';
+      utterance.rate = delivery.rate;
+      utterance.pitch = delivery.pitch;
+      const previousWordCount = segments.slice(0, segmentIndex).join(' ').split(/\s+/).filter(Boolean).length;
+      utterance.onstart = () => { if (speechRunRef.current === runId) setSpeechState(speechPausedRef.current ? 'paused' : 'speaking'); };
+      utterance.onboundary = (event) => {
+        if (speechRunRef.current !== runId) return;
+        const segmentWords = segment.slice(0, event.charIndex).trim().split(/\s+/).filter(Boolean).length;
+        setSpokenWordIndex(previousWordCount + segmentWords);
+      };
+      utterance.onend = () => {
+        if (speechRunRef.current !== runId) return;
+        if (segmentIndex === segments.length - 1) { speechNextSegmentRef.current = null; setSpeechState('idle'); return; }
+        const continueNarration = () => { speechNextSegmentRef.current = null; playSegment(segmentIndex + 1, useFallback); };
+        speechNextSegmentRef.current = continueNarration;
+        if (!speechPausedRef.current) speechPauseTimerRef.current = setTimeout(continueNarration, delivery.pauseMs);
+      };
+      utterance.onerror = (event) => {
+        if (speechRunRef.current !== runId || event.error === 'canceled' || event.error === 'interrupted') return;
+        if (!fallbackTried && selectedVoiceURI && fallbackVoiceURI && selectedVoiceURI !== fallbackVoiceURI) {
+          fallbackTried = true;
+          setTimeout(() => playSegment(segmentIndex, true), 60);
+        } else setSpeechState('idle');
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+    playSegment(0);
+  }, [narratorVoices, profile.grade, profile.narration, profile.speechPitch, profile.speechRate, selectedNarratorVoice, stopSpeech]);
+
+  useEffect(() => { speakRef.current = speak; }, [speak]);
+
   const toggleSpeech = () => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    if (speechState === 'speaking') { window.speechSynthesis.pause(); setSpeechState('paused'); }
-    else if (speechState === 'paused') { window.speechSynthesis.resume(); setSpeechState('speaking'); }
+    if (speechState === 'speaking') {
+      speechPausedRef.current = true;
+      if (speechPauseTimerRef.current) clearTimeout(speechPauseTimerRef.current);
+      speechPauseTimerRef.current = null;
+      window.speechSynthesis.pause();
+      setSpeechState('paused');
+    } else if (speechState === 'paused') {
+      speechPausedRef.current = false;
+      window.speechSynthesis.resume();
+      const continueNarration = speechNextSegmentRef.current;
+      if (continueNarration) speechPauseTimerRef.current = setTimeout(continueNarration, 40);
+      setSpeechState('speaking');
+    }
   };
 
   const screenNarration = useMemo(() => {
@@ -201,7 +295,7 @@ export default function Home() {
     if (screen === 'rewards') return `Quest complete! Your curiosity lit the way. You earned ${reward.stars} stars and ${reward.xp} explorer points.`;
     if (screen === 'backpack') return `Explorer backpack. You have ${profile.facts.length} wonder facts, ${profile.items.length} quest treasures, and ${profile.badges.length} badges.`;
     if (screen === 'progress') return `${profile.nickname}'s progress. Level ${level}. ${profile.xp} explorer points and ${profile.stars} stars.`;
-    if (screen === 'settings') return 'Sound and accessibility settings. You can turn on read aloud, automatic narration, slower or faster speech, reduced motion, larger words, and easy-read type.';
+    if (screen === 'settings') return 'Sound and accessibility settings. Choose a warm narrator voice, preview it, adjust its pace, or turn automatic reading on and off.';
     if (screen === 'assessment-center') return `Explorer Skill Check. Choose a short, untimed assessment for ${profile.grade ? gradeLabel(profile.grade) : 'your grade'}.`;
     if (screen === 'assessment-intro' && activeAssessment) return `${activeAssessment.title}. This untimed check has about ${activeAssessment.targetCount} clues. You can pause whenever you need.`;
     if (screen === 'assessment' && assessmentActivity) return activityNarration(assessmentActivity);
@@ -213,11 +307,16 @@ export default function Home() {
   }, [activeAssessment, activeQuest, activeRegion, activeReport, assessmentActivity, currentQuestion, level, profile, reward, screen]);
 
   useEffect(() => {
-    if (profile.narration && profile.narrationAuto) speak(screenNarration, true);
-    return () => {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
-    };
-  }, [profile.narration, profile.narrationAuto, questionIndex, screen, screenNarration, speak]);
+    if (!profile.narration || !profile.narrationAuto) return;
+    const startTimer = setTimeout(() => speakRef.current(screenNarration, true), 100);
+    return () => clearTimeout(startTimer);
+  }, [profile.narration, profile.narrationAuto, screenNarration]);
+
+  useEffect(() => () => {
+    speechRunRef.current += 1;
+    if (speechPauseTimerRef.current) clearTimeout(speechPauseTimerRef.current);
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+  }, []);
 
   const beginAdventure = () => {
     if (!selectedGrade) return;
@@ -645,7 +744,12 @@ export default function Home() {
             <SettingToggle title="Sound effects" text="Play gentle sounds for answers and rewards." enabled={profile.sound} onToggle={() => updateProfile({ sound: !profile.sound })} icon="♫" />
             <SettingToggle title="Read aloud" text="Show narration controls and hear any text you choose." enabled={profile.narration} onToggle={() => { if (profile.narration) stopSpeech(); updateProfile({ narration: !profile.narration }); }} icon="▶" />
             <SettingToggle title="Read screens automatically" text="Begin reading each new screen. Helpful for early readers." enabled={profile.narrationAuto} onToggle={() => updateProfile({ narrationAuto: !profile.narrationAuto, narration: true })} icon="◉" />
-            <article className="setting-card speech-speed"><span>▶</span><div><h3>Narration speed</h3><p>{profile.speechRate < .85 ? 'Slow and steady' : profile.speechRate > 1.05 ? 'A little faster' : 'Comfortable pace'}</p><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /></div><strong>{profile.speechRate.toFixed(2)}×</strong></article>
+            <article className="narrator-settings" aria-labelledby="narrator-settings-title">
+              <div className="narrator-heading"><span aria-hidden="true">◖</span><div><small>Adventure guide</small><h3 id="narrator-settings-title">Narrator Voice</h3><p>A warm English voice from this device. Nothing is recorded or sent anywhere.</p></div><button type="button" onClick={() => speak(NARRATOR_PREVIEW, true)} disabled={voiceStatus === 'unavailable'}><span aria-hidden="true">▶</span> Preview voice</button></div>
+              <div className="voice-picker"><label htmlFor="narrator-voice">Choose a voice</label>{selectedNarratorVoice?.recommended && <span>Recommended</span>}<select id="narrator-voice" value={selectedNarratorVoice?.voiceURI ?? ''} disabled={!narratorVoices.length} onChange={(event) => updateProfile({ narratorVoiceURI: event.target.value })}>{narratorVoices.length ? narratorVoices.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.recommended ? 'Recommended — ' : ''}{voice.name} ({voice.lang}){voice.localService ? ' · On device' : ''}</option>) : <option value="">{voiceStatus === 'loading' ? 'Finding voices…' : voiceStatus === 'unavailable' ? 'Read-aloud unavailable' : 'Browser’s English voice'}</option>}</select><p>{voiceStatus === 'ready' ? `${selectedNarratorVoice?.name ?? 'The recommended voice'} will guide the next narration.` : voiceStatus === 'loading' ? 'K World is checking the voices installed on this device.' : voiceStatus === 'fallback' ? 'No named English voices were reported, so K World will use the browser’s English fallback.' : 'This browser does not provide speech synthesis. All written instructions remain available.'}</p></div>
+              <div className="narrator-tuning"><label><span><strong>Speaking speed</strong><small>{narratorStyle.style}</small></span><input type="range" min="0.65" max="1.2" step="0.05" value={profile.speechRate} aria-label="Narration speed" onChange={(event) => updateProfile({ speechRate: Number(event.target.value) })} /><output>{profile.speechRate.toFixed(2)}×</output></label><label><span><strong>Voice tone</strong><small>Natural, with a safe pitch range</small></span><input type="range" min="0.9" max="1.1" step="0.02" value={profile.speechPitch} aria-label="Narration pitch" onChange={(event) => updateProfile({ speechPitch: Number(event.target.value) })} /><output>{profile.speechPitch.toFixed(2)}</output></label></div>
+              <p className="voice-note"><span aria-hidden="true">✓</span> Uses the browser Speech Synthesis API only. No microphone, account, recording, or paid speech service is needed.</p>
+            </article>
             <SettingToggle title="Reduce motion" text="Quiet the floating and celebration animations." enabled={profile.reducedMotion} onToggle={() => updateProfile({ reducedMotion: !profile.reducedMotion })} icon="∼" />
             <SettingToggle title="Larger words" text="Make important text a little bigger." enabled={profile.largeText} onToggle={() => updateProfile({ largeText: !profile.largeText })} icon="A+" />
             <SettingToggle title="Easy-read type" text="Use simpler letter shapes and more spacing." enabled={profile.easyRead} onToggle={() => updateProfile({ easyRead: !profile.easyRead })} icon="Aa" />
